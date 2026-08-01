@@ -146,6 +146,23 @@ describe("issue (Issue)", () => {
     expect(err.provider).toBe("ecpay");
   });
 
+  it("maps a duplicate RelateNumber on issue (5070357) to CONFLICT / duplicate_order", async () => {
+    // Live RtnMsg (stage, 2026-08-01): 自訂編號重覆 uses 重覆 (覆), not 重複 — an
+    // ambiguous-timeout resend. It must be a retryable CONFLICT (claim the existing
+    // invoice via RelateNumber), not a terminal VALIDATION that orphans the invoice.
+    server.use(
+      http.post(url(ECPAY_ENDPOINTS.issue), () =>
+        HttpResponse.json(ecError(5070357, "B2C開立發票 自訂編號重覆，請重新設定")),
+      ),
+    );
+    const err = await testProvider()
+      .issue(issueInput())
+      .catch((e) => e);
+    expect(err.code).toBe("CONFLICT");
+    expect(err.reason).toBe("duplicate_order");
+    expect(err.rawCode).toBe("5070357");
+  });
+
   it("rejects an over-amount payload locally before any network call", async () => {
     await expect(
       testProvider().issue(
@@ -207,17 +224,41 @@ describe("void / allowance / voidAllowance", () => {
     expect((res.raw as { RtnCode: number }).RtnCode).toBe(1); // response captured, not discarded
   });
 
-  it("maps a void blocked by an active allowance (5070450) to CONFLICT", async () => {
+  it("maps a void blocked by an active allowance (5070450) to CONFLICT / void_blocked_by_allowance", async () => {
+    // The EXACT live RtnMsg (stage, 2026-08-01): it contains BOTH 折讓 and 作廢
+    // ("…折讓單是否全部已作廢"). A naive keyword match reads the trailing 作廢 and
+    // misclassifies the reason as already_voided — the data-integrity bug in issue #3.
     server.use(
       http.post(url(ECPAY_ENDPOINTS.invalid), () =>
-        HttpResponse.json(ecError(5070450, "B2C作廢發票 該發票已被折讓過，無法直接作廢發票")),
+        HttpResponse.json(
+          ecError(
+            5070450,
+            "B2C作廢發票 該發票已被折讓過，無法直接作廢發票並請確認該發票所開立的折讓單是否全部已作廢",
+          ),
+        ),
       ),
     );
     const err = await testProvider()
       .void({ invoiceNumber: "JU1", reason: "x" })
       .catch((e) => e);
     expect(err.code).toBe("CONFLICT");
+    expect(err.reason).toBe("void_blocked_by_allowance");
     expect(err.rawCode).toBe("5070450");
+  });
+
+  it("maps a re-void of an already-voided invoice (5070453) to CONFLICT / already_voided", async () => {
+    // Live RtnMsg (stage, 2026-08-01): 該發票已被作廢過 — not matched by a bare 已作廢.
+    server.use(
+      http.post(url(ECPAY_ENDPOINTS.invalid), () =>
+        HttpResponse.json(ecError(5070453, "B2C作廢發票 該發票已被作廢過")),
+      ),
+    );
+    const err = await testProvider()
+      .void({ invoiceNumber: "JU1", reason: "x" })
+      .catch((e) => e);
+    expect(err.code).toBe("CONFLICT");
+    expect(err.reason).toBe("already_voided");
+    expect(err.rawCode).toBe("5070453");
   });
 
   it("rejects an over-long Reason (>20 chars) locally", async () => {

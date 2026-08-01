@@ -39,6 +39,15 @@ import { createEcpayProvider, ECPAY_SANDBOX } from "@paid-tw/einvoice-ecpay";
 const invoices = createEcpayProvider({ ...ECPAY_SANDBOX, mode: "TEST" }); // 特店 2000132 — never use in production
 ```
 
+> **公開 sandbox 特店（2000132）務必帶入 `ProductServiceID`。** 綠界 2024-06-18 為開立 API
+> 新增「產品服務別」（B2C 系統多組字軌）。公開 sandbox 的可用字軌**全部綁定產品服務別**，因此
+> 不帶此參數時所有開立都回 `5070350 查無可使用字軌或發票號碼`——很容易被誤判為「沙盒號碼用罄」。
+> 透過具名的 `providerOptions.productServiceId` 傳入即可：
+>
+> ```ts
+> await invoices.issue({ /* … */, providerOptions: { productServiceId: "A00001" } });
+> ```
+
 ## 運作方式（已於測試環境實機驗證）
 
 | 項目 | 說明 |
@@ -119,6 +128,10 @@ const tracks = await invoices.getInvoiceWordSetting({ invoiceYear: "115", useSta
 await invoices.setInvoiceWordStatus(trackId, "ENABLE"); // or "PAUSE" / "DISABLE"
 ```
 
+> **新增字軌（`AddInvoiceWordSetting`）尚未包裝**，目前僅能透過 `invoices.raw()` 呼叫。實測限制：
+> `InvoiceCategory` 只能是 `4`（離線發票）；`MachineID` 必須是後台已註冊的機器編號（無對應 API，
+> 亂填回 `1900003 查無此機器編號`）；號段限制為起號尾數 `00`/`50`、迄號尾數 `49`/`99`。
+
 ## 發票列印
 
 ```ts
@@ -176,9 +189,14 @@ res.invoiceNumber === orig.invoiceNumber; // true — reuses the original number
 ## 補充說明
 
 - **錯誤分流**：`InvoiceError` 上的正規化 `reason` 欄位（`duplicate_order`／
-  `already_voided`／`void_blocked_by_allowance`…）由 `ecpayErrorReason(rtnMsg)`
-  以 `RtnMsg` 關鍵字對應（綠界的 `RtnCode` 區段不一致，訊息才是可靠訊號），
-  無法判定時為 `undefined`。
+  `already_voided`／`void_blocked_by_allowance`…）優先以 `RtnCode` 對應
+  （`ecpayErrorReason(rtnMsg, rtnCode)`）；少數穩定碼（如 `5070357` 自訂編號重覆、
+  `5070453` 已作廢過、`5070450` 已折讓過無法作廢）因實機 `RtnMsg` 含多個狀態詞
+  （會誤導純關鍵字比對）而直接建表，其餘才回退至 `RtnMsg` 關鍵字，無法判定時為
+  `undefined`。這三碼皆對應為 `CONFLICT`（實機驗證，2026-08-01）。
+
+- **產品服務別**：透過 `providerOptions: { productServiceId: "A00001" }` 傳入
+  （對應綠界 `ProductServiceID`）。公開 sandbox 特店需要它，否則開立回 `5070350`（見上方）。
 
 - 零稅率發票（`taxType: "ZERO_RATED"` 或混合）需要通關方式註記：
   傳入 `providerOptions: { clearanceMark: "1" | "2" }`（1=非經海關，2=經海關）。
