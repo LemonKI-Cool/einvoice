@@ -29,6 +29,9 @@ const carrierIssue = (orderId: string) => ({
   taxType: "TAXABLE" as const,
   priceMode: "TAX_INCLUSIVE" as const,
   carrier: { type: "MEMBER" as const },
+  // Public sandbox 字軌 are all bound to a ProductServiceID; without it every issue
+  // returns 5070350 (查無可使用字軌或發票號碼). See issue #3.
+  providerOptions: { productServiceId: "A00001" },
 });
 
 describe.skipIf(!live)("ECPay live (stage) — issue → query → void", LIVE_OPTS, () => {
@@ -160,6 +163,7 @@ describe.skipIf(!live)("ECPay live (stage) — Issue field-rule audit", LIVE_OPT
     taxType: "TAXABLE" as const,
     priceMode: "TAX_INCLUSIVE" as const,
     carrier: { type: "MEMBER" as const },
+    providerOptions: { productServiceId: "A00001" },
     ...o,
   });
 
@@ -167,7 +171,10 @@ describe.skipIf(!live)("ECPay live (stage) — Issue field-rule audit", LIVE_OPT
   // docs' "ZeroTaxRateReason required" is NOT enforced.
   it("issues a zero-rated invoice with ClearanceMark (no ZeroTaxRateReason needed)", async () => {
     const res = await p.issue(
-      base({ taxType: "ZERO_RATED", providerOptions: { clearanceMark: "2" } }),
+      base({
+        taxType: "ZERO_RATED",
+        providerOptions: { clearanceMark: "2", productServiceId: "A00001" },
+      }),
     );
     expect(res.invoiceNumber).toMatch(/^[A-Z]{2}\d{8}$/);
   });
@@ -241,6 +248,7 @@ describe.skipIf(!live)("ECPay live (stage) — 發票列印", LIVE_OPTS, () => {
       amount: { salesAmount: 100, taxAmount: 0, totalAmount: 100 },
       taxType: "TAXABLE",
       priceMode: "TAX_INCLUSIVE",
+      providerOptions: { productServiceId: "A00001" },
     });
     const date = paper.invoiceDate.toISOString().slice(0, 10);
     const u = await p.getPrintUrl({
@@ -384,5 +392,69 @@ describe.skipIf(!live)("ECPay live (stage) — 查詢財政部配號", LIVE_OPTS
     await expect(p.setInvoiceWordStatus("9999999", "ENABLE")).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+});
+
+describe.skipIf(!live)("ECPay live (stage) — 錯誤碼對應 (issue #3)", LIVE_OPTS, () => {
+  const p = provider();
+  const taipeiDate = (d: Date) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Taipei" }).format(d);
+
+  // Regression for the exact wire responses recorded 2026-08-01. These assert the
+  // *normalized* mapping (code + reason), which synthetic doc fixtures miss because
+  // the real RtnMsg wording differs (see mapEcpayError / ecpayErrorReason).
+
+  it("5070357 自訂編號重覆 → CONFLICT / duplicate_order (ambiguous-timeout resend)", async () => {
+    const orderId = `E3D${Date.now()}`;
+    await p.issue(carrierIssue(orderId));
+    const err = await p.issue(carrierIssue(orderId)).catch((e) => e);
+    expect(err.rawCode).toBe("5070357");
+    expect(err.code).toBe("CONFLICT");
+    expect(err.reason).toBe("duplicate_order");
+  });
+
+  it("5070453 該發票已被作廢過 → CONFLICT / already_voided (idempotent re-void)", async () => {
+    const orderId = `E3V${Date.now()}`;
+    const inv = await p.issue(carrierIssue(orderId));
+    const invoiceDate = taipeiDate(inv.invoiceDate);
+    await p.void({
+      invoiceNumber: inv.invoiceNumber,
+      reason: "測試作廢",
+      providerOptions: { invoiceDate },
+    });
+    const err = await p
+      .void({
+        invoiceNumber: inv.invoiceNumber,
+        reason: "再次作廢",
+        providerOptions: { invoiceDate },
+      })
+      .catch((e) => e);
+    expect(err.rawCode).toBe("5070453");
+    expect(err.code).toBe("CONFLICT");
+    expect(err.reason).toBe("already_voided");
+  });
+
+  it("5070450 該發票已被折讓過 → CONFLICT / void_blocked_by_allowance (NOT already_voided)", async () => {
+    const orderId = `E3A${Date.now()}`;
+    const inv = await p.issue(carrierIssue(orderId));
+    const invoiceDate = taipeiDate(inv.invoiceDate);
+    await p.allowance({
+      invoiceNumber: inv.invoiceNumber,
+      allowanceId: orderId,
+      items: [{ description: "整合測試商品", quantity: 2, unitPrice: 50, amount: 100 }],
+      amount: { salesAmount: 100, taxAmount: 0, totalAmount: 100 },
+      providerOptions: { invoiceDate },
+    });
+    const err = await p
+      .void({
+        invoiceNumber: inv.invoiceNumber,
+        reason: "測試作廢",
+        providerOptions: { invoiceDate },
+      })
+      .catch((e) => e);
+    expect(err.rawCode).toBe("5070450");
+    expect(err.code).toBe("CONFLICT");
+    // The critical assertion: the trailing 作廢 in the real message must NOT win.
+    expect(err.reason).toBe("void_blocked_by_allowance");
   });
 });

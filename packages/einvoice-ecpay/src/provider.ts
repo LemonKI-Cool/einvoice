@@ -876,6 +876,11 @@ export class EcpayProvider implements InvoiceProvider {
       ClearanceMark: opts.clearanceMark as string | undefined,
       ZeroTaxRateReason: opts.zeroTaxRateReason as string | undefined,
       SpecialTaxType: opts.specialTaxType as string | number | undefined,
+      // 產品服務別 (ECPay 2024-06-18, "B2C 系統多組字軌"). Public sandbox 字軌 are all
+      // bound to a ProductServiceID, so issuing without it returns 5070350
+      // (查無可使用字軌或發票號碼) — easily misread as "sandbox numbers exhausted".
+      // Named option; still overridable via providerOptions.data.
+      ProductServiceID: opts.productServiceId as string | undefined,
       ...(opts.data as Record<string, unknown> | undefined),
     };
     if (this.config.validatePayload !== false) assertValidIssuePayload(data);

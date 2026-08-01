@@ -108,7 +108,7 @@ export async function ecpayRequest(
     throw new InvoiceError(result.RtnMsg || "ECPay returned an error", {
       provider: "ecpay",
       code: mapEcpayError(Number(result.RtnCode), result.RtnMsg),
-      reason: ecpayErrorReason(result.RtnMsg),
+      reason: ecpayErrorReason(result.RtnMsg, Number(result.RtnCode)),
       rawCode: String(result.RtnCode),
       rawMessage: result.RtnMsg,
       raw: result,
@@ -121,10 +121,14 @@ export async function ecpayRequest(
 /**
  * Map an ECPay invoice error onto a normalized {@link InvoiceErrorCode}. ECPay's
  * B2C `RtnCode`s span inconsistent ranges (2, 1600003, 5000022 …, verified
- * live), so the Chinese `RtnMsg` is the reliable signal; everything unmatched is
- * treated as field/business validation (the common case).
+ * live), so the Chinese `RtnMsg` is the reliable signal for most codes; a few
+ * stable codes are pinned in {@link ECPAY_ERROR_TABLE} because their message
+ * keywords are ambiguous. Everything unmatched is treated as field/business
+ * validation (the common case).
  */
 export function mapEcpayError(rtnCode: number, rtnMsg = ""): InvoiceErrorCode {
+  const known = ECPAY_ERROR_TABLE[rtnCode];
+  if (known) return known.code;
   // 9000001 = 呼叫財政部API失敗 (財政部 maintenance) — transient, retryable, NOT
   // an input error. Surface it as NETWORK so callers don't reject a valid value.
   if (rtnCode === 9000001 || /財政部.*(失敗|維護)|呼叫.*API失敗/.test(rtnMsg))
@@ -132,7 +136,8 @@ export function mapEcpayError(rtnCode: number, rtnMsg = ""): InvoiceErrorCode {
   if (/特店.*不存在|平台商.*不存在|金鑰|簽章|未授權/.test(rtnMsg)) return InvoiceErrorCode.AUTH;
   if (/字軌.*(用罄|用完|不足|已滿)|號碼.*(用罄|用完)/.test(rtnMsg))
     return InvoiceErrorCode.NUMBER_EXHAUSTED;
-  if (/已作廢|已開立|已存在|已折讓|折讓過|同意|重複|不可重複/.test(rtnMsg))
+  // 已被作廢過 / 已被折讓過 / 自訂編號重覆(覆) — note 覆 and 複 are both used live.
+  if (/已(被)?作廢|作廢過|已開立|已存在|已(被)?折讓|折讓過|同意|重[複覆]|不可重[複覆]/.test(rtnMsg))
     return InvoiceErrorCode.CONFLICT;
   // AUTH already claimed 特店/平台商 不存在 above, so a bare 不存在 here is a
   // missing record (e.g. 4000001 不存在此交易單號 for an unknown Tsr).
@@ -142,18 +147,48 @@ export function mapEcpayError(rtnCode: number, rtnMsg = ""): InvoiceErrorCode {
 }
 
 /**
- * Map an ECPay error onto a normalized {@link InvoiceErrorReason}. Like
- * {@link mapEcpayError} this keys off the Chinese `RtnMsg` (ECPay's RtnCodes
- * span inconsistent ranges). Best-effort: `已折讓/折讓過` is only emitted by
- * the void API, so it resolves to `void_blocked_by_allowance`; `undefined`
- * when no distinct action applies.
+ * Map an ECPay error onto a normalized {@link InvoiceErrorReason}. Prefers the
+ * stable-`RtnCode` table (pass `rtnCode`), then falls back to `RtnMsg` keyword
+ * matching. The keyword branches are ordered specific → general: a void-blocked
+ * message ("該發票已被折讓過…請確認…折讓單是否全部已作廢") contains BOTH 折讓 and
+ * 作廢, so `void_blocked_by_allowance` must be tested before `already_voided` or
+ * the trailing 作廢 misclassifies it. Returns `undefined` when no distinct
+ * consumer action applies.
  */
-export function ecpayErrorReason(rtnMsg = ""): InvoiceErrorReason | undefined {
+export function ecpayErrorReason(rtnMsg = "", rtnCode?: number): InvoiceErrorReason | undefined {
+  if (rtnCode !== undefined) {
+    const known = ECPAY_ERROR_TABLE[rtnCode];
+    if (known?.reason) return known.reason;
+  }
   if (/金鑰|簽章|未授權/.test(rtnMsg)) return InvoiceErrorReason.CREDENTIALS_INVALID;
   if (/特店.*不存在|平台商.*不存在/.test(rtnMsg)) return InvoiceErrorReason.NOT_ENROLLED;
-  if (/已作廢/.test(rtnMsg)) return InvoiceErrorReason.ALREADY_VOIDED;
-  if (/已折讓|折讓過/.test(rtnMsg)) return InvoiceErrorReason.VOID_BLOCKED_BY_ALLOWANCE;
-  if (/重複|不可重複/.test(rtnMsg)) return InvoiceErrorReason.DUPLICATE_ORDER;
+  // Specific first: a void blocked by an allowance mentions 折讓 (and, confusingly,
+  // 作廢 too) — match it before the bare already-voided check below.
+  if (/已(被)?折讓過|已折讓|已開立折讓/.test(rtnMsg))
+    return InvoiceErrorReason.VOID_BLOCKED_BY_ALLOWANCE;
+  if (/已(被)?作廢過|已作廢/.test(rtnMsg)) return InvoiceErrorReason.ALREADY_VOIDED;
+  if (/重[複覆]|不可重[複覆]/.test(rtnMsg)) return InvoiceErrorReason.DUPLICATE_ORDER;
   if (/系統忙碌|請稍後/.test(rtnMsg)) return InvoiceErrorReason.RATE_LIMITED;
   return undefined;
 }
+
+/**
+ * Stable ECPay B2C `RtnCode`s with a definitive `(code, reason)` — verified live
+ * against `einvoice-stage.ecpay.com.tw` (2026-08-01). These take precedence over
+ * `RtnMsg` keyword matching because their live messages defeat it: 5070357 uses
+ * 重覆 (not 重複); 5070453's 該發票已被作廢過 isn't matched by a bare 已作廢; and
+ * 5070450's message contains both 折讓 and 作廢 (see {@link ecpayErrorReason}).
+ */
+const ECPAY_ERROR_TABLE: Record<number, { code: InvoiceErrorCode; reason?: InvoiceErrorReason }> = {
+  // 開立: 自訂編號重覆 — an ambiguous-timeout resend of an issue. CONFLICT (retryable
+  // via QUERY_BY_ORDER_ID: look the existing invoice up by RelateNumber and claim it),
+  // matching Amego 3040171 / ezPay LIB10003.
+  5070357: { code: InvoiceErrorCode.CONFLICT, reason: InvoiceErrorReason.DUPLICATE_ORDER },
+  // 作廢: 該發票已被折讓過，無法直接作廢 — must void the allowance(s) first.
+  5070450: {
+    code: InvoiceErrorCode.CONFLICT,
+    reason: InvoiceErrorReason.VOID_BLOCKED_BY_ALLOWANCE,
+  },
+  // 作廢: 該發票已被作廢過 — the target state is already reached (idempotent no-op).
+  5070453: { code: InvoiceErrorCode.CONFLICT, reason: InvoiceErrorReason.ALREADY_VOIDED },
+};
