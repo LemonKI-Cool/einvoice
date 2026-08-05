@@ -25,6 +25,20 @@ Simpany（[simpany.co](https://simpany.co/e-invoice)）的 [@paid-tw/einvoice](.
   2. 解析 `companyId`(由 config 指定,或 `GET /me` 取得)
   3. 對 receipt host 打 `POST /c/{companyId}/receipts/{b2b|b2c}`,並帶 `Authorization: Bearer <token>`
 
+```mermaid
+sequenceDiagram
+  participant App as 你的程式 (SimpanyProvider)
+  participant Auth as api.simpany.co
+  participant Rcpt as member2.simpany.co
+  App->>Auth: POST /v1/login {account, password}
+  Auth-->>App: data.token — JWT, 效期約 30 天
+  App->>Auth: GET /v1/me (Authorization: Bearer token)
+  Auth-->>App: data.companies[] (id, permissions)
+  Note over App: 解析 companyId
+  App->>Rcpt: POST /c/{companyId}/receipts/b2c (同一顆 Bearer token)
+  Rcpt-->>App: data (id, invoiceNumber, ...)
+```
+
 ## 身份驗證(Authentication)
 
 - **帳密換 token**:`POST https://api.simpany.co/v1/login`,body `{ account, password }`
@@ -39,6 +53,42 @@ Simpany（[simpany.co](https://simpany.co/e-invoice)）的 [@paid-tw/einvoice](.
 - 登入**無 captcha / CSRF / MFA**;帳密僅經 TLS 傳給 `/login`。
 - ⚠️ **安全**:token 等同一組效期 30 天的長期憑證——請只放在伺服器端,勿寫入前端或版控;
   帳密與 token 都應以環境變數 / secret 管理。追蹤日誌**不會記錄 request/response body**(見「錯誤處理與除錯」)。
+
+**用 curl 手動取 token / 檢查權限:**
+
+```bash
+# 1) 帳密換 token
+curl -s https://api.simpany.co/v1/login \
+  -H 'content-type: application/json' \
+  -d '{"account":"user@example.com","password":"••••••"}'
+# → {"status":"ok","code":200,"data":{"id":5129,"token":"<JWT>"}}
+
+# 2) 用 token 查帳號與名下公司(確認 permissions 是否含 e_receipt)
+curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
+```
+
+**`GET /v1/me` 回應範例**(程式端對應 `client.ts` 匯出的 `SimpanyMe` / `SimpanyCompany` 型別;以下為示意假資料):
+
+```jsonc
+{
+  "status": "ok",
+  "code": 200,
+  "data": {
+    "id": 5129,
+    "name": "王小明",
+    "email": "user@example.com",
+    "companies": [
+      {
+        "id": 3432,                       // ← 這就是 companyId
+        "name": "範例股份有限公司",
+        "service_type": "REGISTRATION_BOOKKEEPING",
+        "operating_status": "OPERATING",
+        "permissions": ["account_book", "e_receipt"]  // ← 需含 e_receipt 才能開發票
+      }
+    ]
+  }
+}
+```
 
 ## 操作與端點（人工整理,UNVERIFIED）
 
@@ -86,6 +136,15 @@ Simpany（[simpany.co](https://simpany.co/e-invoice)）的 [@paid-tw/einvoice](.
 | `shouldAdjustTaxAmount` | 稅額調整 | 選填 | boolean(B2B ±1) | `providerOptions` |
 
 > 注意:表單**不提供指定開立日期**(由伺服器當下開立),故 unified 的 `date` 對 Simpany 無效。
+
+### 金額語意
+
+- Simpany 的**稅額與含稅/未稅計算在伺服器端完成**:你送 `items`(單價 `price` × 數量)與
+  `isTaxIncluded`(由 unified 的 `priceMode` 決定 `TAX_INCLUSIVE` / `TAX_EXCLUSIVE`),伺服器據此
+  算稅並產生法定金額。
+- unified 的 `amount`(`salesAmount` / `taxAmount` / `totalAmount`,**整數 TWD**)在本 adapter 主要供
+  **輸入驗證與結果回填**,不會逐欄送給 Simpany(伺服器以 `items` 為準)。
+- 台灣法定金額為整數 TWD;本 adapter **不支援外幣**(未宣告 `FOREIGN_CURRENCY`)。
 
 ## 用法
 
@@ -154,6 +213,16 @@ await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "開錯", provid
 - ✅ base URL 與 `/c/{companyId}/receipts…` 路由結構正確(路由有 match)。
 - ✅ 錯誤 envelope 為框架式 `{ message }`(必要時帶 `{ errors }`);未開通電子發票的公司
   對這些端點會回 **404**(adapter 會正規化成 `NOT_FOUND`)。
+
+## 取得「已開通電子發票」的帳號
+
+發票端點需要公司已在 Simpany **開通電子發票(加值中心)服務**。未開通時:
+
+- `GET /v1/me` 的 `permissions` **不會含 `e_receipt`**;
+- 對 `/c/{companyId}/receipts…` 一律回 **404**(adapter → `NOT_FOUND`)。
+
+申請 / 開通請洽 Simpany 電子發票服務([simpany.co/e-invoice](https://simpany.co/e-invoice))。
+開通後以同一組帳號登入即可操作(不需另建帳號)。
 
 ## 待驗證清單(需「已開通電子發票」的帳號;接手的人請優先確認,對不上就發 issue)
 

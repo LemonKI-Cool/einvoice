@@ -32,6 +32,20 @@ Simpany ([simpany.co](https://simpany.co/e-invoice)) adapter for
   2. resolve `companyId` (from config, or `GET /me`)
   3. call the receipt host `POST /c/{companyId}/receipts/{b2b|b2c}` with `Authorization: Bearer <token>`
 
+```mermaid
+sequenceDiagram
+  participant App as Your code (SimpanyProvider)
+  participant Auth as api.simpany.co
+  participant Rcpt as member2.simpany.co
+  App->>Auth: POST /v1/login {account, password}
+  Auth-->>App: data.token — JWT, ~30-day TTL
+  App->>Auth: GET /v1/me (Authorization: Bearer token)
+  Auth-->>App: data.companies[] (id, permissions)
+  Note over App: resolve companyId
+  App->>Rcpt: POST /c/{companyId}/receipts/b2c (same Bearer token)
+  Rcpt-->>App: data (id, invoiceNumber, ...)
+```
+
 ## Authentication
 
 - **Credentials → token:** `POST https://api.simpany.co/v1/login` with body
@@ -47,6 +61,43 @@ Simpany ([simpany.co](https://simpany.co/e-invoice)) adapter for
 - ⚠️ **Security:** the token is a 30-day long-lived credential — keep it server-side, never in
   the frontend or version control; manage both credentials and token as env vars / secrets.
   Trace logs **never record request/response bodies** (see "Errors & debugging").
+
+**Obtain a token / check permissions with curl:**
+
+```bash
+# 1) exchange credentials for a token
+curl -s https://api.simpany.co/v1/login \
+  -H 'content-type: application/json' \
+  -d '{"account":"user@example.com","password":"••••••"}'
+# → {"status":"ok","code":200,"data":{"id":5129,"token":"<JWT>"}}
+
+# 2) use the token to list the account's companies (check for e_receipt)
+curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
+```
+
+**`GET /v1/me` response example** (typed in code as the exported `SimpanyMe` /
+`SimpanyCompany` in `client.ts`; placeholder data below):
+
+```jsonc
+{
+  "status": "ok",
+  "code": 200,
+  "data": {
+    "id": 5129,
+    "name": "Ming Wang",
+    "email": "user@example.com",
+    "companies": [
+      {
+        "id": 3432,                       // ← this is the companyId
+        "name": "Example Co., Ltd.",
+        "service_type": "REGISTRATION_BOOKKEEPING",
+        "operating_status": "OPERATING",
+        "permissions": ["account_book", "e_receipt"]  // ← needs e_receipt to issue
+      }
+    ]
+  }
+}
+```
 
 ## Operations & endpoints (hand-compiled, UNVERIFIED)
 
@@ -97,6 +148,17 @@ the same checks locally before sending (disable with `validatePayload: false`).
 
 > Note: the form offers no issue-date field (the server issues at "now"), so the
 > unified `date` has no effect on Simpany.
+
+### Money semantics
+
+- Simpany **computes tax and tax-inclusive/exclusive amounts server-side**: you send
+  `items` (unit `price` × quantity) and `isTaxIncluded` (from the unified `priceMode`:
+  `TAX_INCLUSIVE` / `TAX_EXCLUSIVE`); the server derives the statutory amounts.
+- The unified `amount` (`salesAmount` / `taxAmount` / `totalAmount`, **integer TWD**) is
+  used by this adapter mainly for input validation and to fill the result — it is not sent
+  field-by-field (the server is authoritative, from `items`).
+- Statutory amounts are integer TWD; this adapter does **not** support foreign currency
+  (no `FOREIGN_CURRENCY`).
 
 ## Usage
 
@@ -164,6 +226,18 @@ recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
 - ✅ The base URL and `/c/{companyId}/receipts…` route structure are correct (routes matched).
 - ✅ The error envelope is framework-style `{ message }` (with `{ errors }` when relevant);
   a company not enrolled for e-invoice gets a **404** on these routes (normalized to `NOT_FOUND`).
+
+## Getting an e-invoice-enabled account
+
+The receipt endpoints require the company to have Simpany's **e-invoice
+(value-added center) service enabled**. When it isn't:
+
+- `GET /v1/me` `permissions` will **not** include `e_receipt`;
+- every `/c/{companyId}/receipts…` call returns **404** (adapter → `NOT_FOUND`).
+
+Apply for / enable it via Simpany's e-invoice service
+([simpany.co/e-invoice](https://simpany.co/e-invoice)). Once enabled, the same
+account credentials work — no separate account is needed.
 
 ## Verification checklist — needs an e-invoice-enabled account (open an issue on mismatch)
 
