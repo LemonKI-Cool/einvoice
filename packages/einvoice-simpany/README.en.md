@@ -119,6 +119,42 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
   NOT supported: MIXED_TAX (tax type is invoice-level), FOREIGN_CURRENCY,
   CARRIER_VALIDATION (no such endpoint in the client).
 
+## Extension methods (beyond the `InvoiceProvider` interface)
+
+Alongside the five unified operations, the adapter offers these Simpany-specific
+methods (mirroring ezreceipt's extension convention). The **read-only** ones mutate
+nothing — handy for verifying the integration, reconciliation, and pre-issue checks:
+
+| Method | Endpoint | Purpose | Mutates? |
+|---|---|---|---|
+| `listReceipts(query?)` | GET `/receipts` | list issued invoices (reconciliation) | read-only |
+| `listTrackNumbers({enabledOnly?})` | GET `/track-numbers` | **track numbers**: total / used / remaining per range (below) | read-only |
+| `getSubscriptionStatus()` | GET `/subscription-status` | **plan quota**: `{ status, remainingQuantity }` (below) | read-only |
+| `listFrequentItems()` | GET `/frequent-items` | **frequent items** (reusable name/price presets) | read-only |
+| `notifyReceipt(no, emails, {receiptId?})` | POST `/receipts/{id}/notifications` | resend / send the notification to given emails | sends email |
+| `printReceipt(no, {receiptId?, format?, reprint?})` | POST `/receipts/{id}/print` | download the proof-copy PDF (bytes) | read-only |
+
+### Subscription quota
+
+Simpany is **subscription-based**: each plan has a quota of issuable invoices.
+`getSubscriptionStatus()` returns `{ status, remainingQuantity, raw }` — `remainingQuantity`
+is the **remaining issue count**, useful as a pre-issue check. ⚠️ This is a **different
+"remaining" from track numbers**:
+
+- **Track-number remaining** (`listTrackNumbers()`): how many **invoice numbers** are left in
+  the government-allocated ranges.
+- **Subscription remaining** (`getSubscriptionStatus()`): how many issues are left in the
+  **Simpany plan** you purchased.
+
+Both must be sufficient to issue: out of numbers → allocate/split a track; out of quota → buy more.
+
+### Frequent items
+
+The back office maintains "frequent items" — reusable name/price presets picked at issue time.
+`listFrequentItems()` reads the list (hand-compiled fields, roughly `{ id, name, price }`). The
+adapter exposes read-only access; create/update/delete endpoints are registered in
+`SIMPANY_RECEIPT_ENDPOINTS` (`frequentItems` / `frequentItem`) and can be wired as methods if needed.
+
 ## Issue fields & required rules
 
 `POST /c/{cid}/receipts/{b2b|b2c}`. Required/format below come from the issue

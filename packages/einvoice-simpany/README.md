@@ -108,6 +108,37 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 - **能力**:宣告 ISSUE / VOID / ALLOWANCE / VOID_ALLOWANCE / QUERY / B2B。**不支援**
   MIXED_TAX(稅別為發票層級)、FOREIGN_CURRENCY、CARRIER_VALIDATION(前端無此端點)。
 
+## 擴充方法(非 `InvoiceProvider` 介面)
+
+除了五個統一操作,adapter 另提供以下 Simpany 專屬方法(比照 ezreceipt 的擴充慣例)。**唯讀**方法
+不會異動任何資料,很適合用來驗證串接、對帳、開立前檢查:
+
+| 方法 | 端點 | 說明 | 異動? |
+|---|---|---|---|
+| `listReceipts(query?)` | GET `/receipts` | 發票列表(對帳 / 確認可讀) | 唯讀 |
+| `listTrackNumbers({enabledOnly?})` | GET `/track-numbers` | **字軌**:每段的總量 / 已開立 / 剩餘(見下) | 唯讀 |
+| `getSubscriptionStatus()` | GET `/subscription-status` | **訂閱額度**:`{ status, remainingQuantity }`(見下) | 唯讀 |
+| `listFrequentItems()` | GET `/frequent-items` | **常用品項**清單(可重複使用的品名/單價預設) | 唯讀 |
+| `notifyReceipt(no, emails, {receiptId?})` | POST `/receipts/{id}/notifications` | 補寄 / 寄送通知信到指定 email | 寄送 email |
+| `printReceipt(no, {receiptId?, format?, reprint?})` | POST `/receipts/{id}/print` | 下載證明聯 PDF(回傳 bytes) | 唯讀 |
+
+### 訂閱額度(subscription quota)
+
+Simpany 採**訂閱制**:每個方案有可開立張數的額度。`getSubscriptionStatus()` 回
+`{ status, remainingQuantity, raw }`——`remainingQuantity` 是**剩餘可開立張數**,可在開立前檢查
+額度是否足夠。⚠️ 這與「字軌剩餘」是**兩種不同的剩餘**:
+
+- **字軌剩餘**(`listTrackNumbers()`):財政部配號的**發票號碼範圍**還剩幾號可用。
+- **訂閱剩餘**(`getSubscriptionStatus()`):你在 Simpany **買的方案額度**還剩幾張。
+
+兩者都要足夠才開得出來:沒字軌號碼 → 取號 / 拆分字軌;沒訂閱額度 → 加購方案。
+
+### 常用品項(frequent items)
+
+後台可維護「常用品項」——重複使用的品名 / 單價預設,開立時挑選帶入。`listFrequentItems()`
+讀取清單(欄位屬人工整理,約 `{ id, name, price }`)。目前 adapter 只提供讀取;新增 / 修改 /
+刪除的端點已登錄於 `SIMPANY_RECEIPT_ENDPOINTS`(`frequentItems` / `frequentItem`),需要時可再包成方法。
+
 ## 開立欄位對照與必填規則
 
 `POST /c/{cid}/receipts/{b2b|b2c}`(依買方有無統編決定 b2b/b2c)。下表的必填 / 格式來自
