@@ -1,4 +1,4 @@
-import { http } from "msw";
+import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Capability, CarrierType, PriceMode, TaxType, supports } from "@paid-tw/einvoice";
 import { okLogin, okMe, rerror, rok, rurl, server, testProvider, url } from "./server.js";
@@ -260,6 +260,23 @@ describe("allowance", () => {
     });
     expect(body.items).toEqual([{ id: 77, quantity: 1, price: 10 }]);
   });
+
+  it("throws VALIDATION when an item can't be matched to an invoice line", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts/900`), () => rok({ id: 900, items: [] })),
+    );
+    await expect(
+      testProvider().allowance({
+        invoiceNumber: "AB1",
+        allowanceId: "A-3",
+        items: [{ description: "x", quantity: 1, unitPrice: 10, amount: 10 }],
+        amount: { salesAmount: 10, taxAmount: 0, totalAmount: 10 },
+        providerOptions: { receiptId: 900 },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
 });
 
 describe("voidAllowance", () => {
@@ -355,6 +372,29 @@ describe("query", () => {
     await expect(testProvider().query({ invoiceNumber: "NOPE" })).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+
+  it("resolves the receiptId from a { list: [...] } lookup response", async () => {
+    server.use(
+      login(),
+      me(),
+      // A list body that is NOT unwrapped to a bare array (no top-level `data`).
+      http.get(rurl(`/c/${CID}/receipts`), () =>
+        HttpResponse.json({ list: [{ id: 771, invoiceNumber: "AB77" }] }),
+      ),
+      http.get(rurl(`/c/${CID}/receipts/771`), () =>
+        rok({
+          id: 771,
+          invoiceNumber: "AB77",
+          status: "ISSUED",
+          totalAmount: 0,
+          taxAmount: 0,
+          items: [],
+        }),
+      ),
+    );
+    const res = await testProvider().query({ invoiceNumber: "AB77" });
+    expect(res.invoiceNumber).toBe("AB77");
   });
 });
 
