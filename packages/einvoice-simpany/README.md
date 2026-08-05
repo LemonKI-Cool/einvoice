@@ -10,15 +10,35 @@ Simpany（[simpany.co](https://simpany.co/e-invoice)）的 [@paid-tw/einvoice](.
 >
 > 使用前**請務必詳閱下方[免責聲明](#免責聲明)**,並自行確認符合相關法規與 Simpany 服務條款。
 
-## API 概觀
+> 圖例:✅ = 已對過正式 API(VERIFIED);⚠️ = 人工整理、尚未實測(UNVERIFIED)。
 
-Simpany 沒有公開的開發者 API,以下是我們人工整理的形狀(可能有誤):
+## 架構與運作機制
 
-- **兩個 host、同一顆 JWT**:
-  - 帳號 / 認證:`https://api.simpany.co/v1/`（`POST /login`、`GET /me`）— 已驗證。
-  - 電子發票（內部稱 **receipt**）:`https://member2.simpany.co/api/v1/c/{companyId}/…` — 待驗證。
-- 登入 `POST /v1/login { account, password }` → `{ data:{ id, token } }`,`token` 是效期
-  約 30 天的 JWT,同一顆同時授權兩個 host。
+- 本套件實作 core 的 `InvoiceProvider` 契約(`@paid-tw/einvoice`)。應用端只依賴該介面,
+  換供應商就只換 constructor(`createSimpanyProvider(...)`),其餘程式不動。
+- Simpany 沒有公開的開發者 API;以下形狀為人工整理(可能有誤)。
+- **雙 host、同一顆 JWT**:
+  - 認證 / 帳號:`https://api.simpany.co/v1`(`POST /login`、`GET /me`)— ✅ 已驗證
+  - 電子發票(內部稱 **receipt**):`https://member2.simpany.co/api/v1/c/{companyId}/…` — ⚠️ 待驗證
+- **一次操作的資料流**(以開立為例):
+  1. 惰性登入取得 JWT(或使用注入的 `token`)
+  2. 解析 `companyId`(由 config 指定,或 `GET /me` 取得)
+  3. 對 receipt host 打 `POST /c/{companyId}/receipts/{b2b|b2c}`,並帶 `Authorization: Bearer <token>`
+
+## 身份驗證(Authentication)
+
+- **帳密換 token**:`POST https://api.simpany.co/v1/login`,body `{ account, password }`
+  (`account` 為 member 的 email)→ 回 `{ status:"ok", data:{ id, token } }`。
+- **token 是 JWT bearer**,效期約 **30 天**(`exp − iat = 2,592,000` 秒)。之後每個請求都帶
+  HTTP header `Authorization: Bearer <token>`。
+- **同一顆 token 同時授權兩個 host**(已交叉驗證):認證 host 與發票 host 共用。
+- **client 行為**:惰性登入(首次呼叫才登入)→ 快取 token → 遇 `401` 自動重新登入一次並重試
+  (需 config 有 `password`)。
+- **可直接注入 token**:設定 `token` 即可略過帳密登入(例如從 vault 取),此時可不帶
+  `account` / `password`。
+- 登入**無 captcha / CSRF / MFA**;帳密僅經 TLS 傳給 `/login`。
+- ⚠️ **安全**:token 等同一組效期 30 天的長期憑證——請只放在伺服器端,勿寫入前端或版控;
+  帳密與 token 都應以環境變數 / secret 管理。追蹤日誌**不會記錄 request/response body**(見「錯誤處理與除錯」)。
 
 ## 操作與端點（人工整理,UNVERIFIED）
 
@@ -97,6 +117,35 @@ await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "開錯", provid
 `providerOptions` 可帶的欄位:`receiptId`、`allowanceId`、`draft`、`emails`(通知信收件人)、
 `zeroTaxRateReasonCode` / `customsClearanceType`(零稅率用)、`shouldAdjustTaxAmount`(B2B ±1 稅額調整)、
 `items`(直接指定折讓品項 `[{id,quantity,price}]`)。
+
+## 設定(SimpanyConfig)
+
+| 欄位 | 必填 | 說明 |
+|---|---|---|
+| `account` | 二擇一 | 登入帳號(member email)。與 `token` 二擇一 |
+| `password` | 二擇一 | 登入密碼(僅走 TLS)。與 `token` 二擇一;有 `password` 才能在 401 時自動重登 |
+| `token` | 二擇一 | 預先取得的 JWT,略過帳密登入 |
+| `companyId` | 選填 | 指定公司範圍;省略則由 `GET /me` 解析 |
+| `companyUbn` | 選填 | 多家公司時以統編挑選 |
+| `validatePayload` | 選填 | 預設 `true`;送出前做本地驗證(設 `false` 關閉) |
+| `timeoutMs` | 選填 | 單一請求逾時(毫秒) |
+| `baseUrl` | 選填 | 覆寫認證 host base(預設 `https://api.simpany.co/v1`) |
+| `receiptBaseUrl` | 選填 | 覆寫發票 host base(預設 `https://member2.simpany.co/api/v1`) |
+| `debug` | 選填 | 追蹤回呼(metadata-only,見下) |
+| `fetch` | 選填 | 注入自訂 `fetch`(測試 / edge runtime) |
+
+## 錯誤處理與除錯
+
+- **所有失敗都會 throw core 的 `InvoiceError`**(不會拋出原始錯誤),帶:
+  - `code`:`AUTH` / `VALIDATION` / `NOT_FOUND` / `CONFLICT` / `NETWORK` / `PROVIDER` / `UNSUPPORTED` / `UNKNOWN`
+  - `rawCode`、`rawMessage`、`raw`(原始回應,供除錯)
+  - 判斷型別請用 `isInvoiceError(e)`,**不要用 `instanceof`**(跨 ESM/CJS 或版本不一致時 `instanceof` 會失準)。
+- **對應規則**:HTTP `401`/`403`→`AUTH`、`404`→`NOT_FOUND`、`409`→`CONFLICT`、`400`/`422`→`VALIDATION`、
+  `429` 與 `5xx`→`PROVIDER`;傳輸失敗→`NETWORK`。member2 的兩種錯誤格式(框架式 `{message}` / `{errors}`、
+  業務式 `{status:"error",error:{title}}`)都已正規化。
+- **除錯 / 追蹤**:設定 `debug` 回呼可收到每個 HTTP 呼叫的 metadata(`provider` / `method` / `url` /
+  `status` / `durationMs` / `error`);**不會記錄 request / response body**(可能含個資或加密內容)。
+  需要看 body 時,請自行包一層 `fetch` 由 `config.fetch` 傳入。
 
 ## 已交叉驗證(以自有帳號做唯讀查詢確認,未開立任何發票)
 
