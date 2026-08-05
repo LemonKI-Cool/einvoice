@@ -418,6 +418,39 @@ export class SimpanyProvider implements InvoiceProvider {
     });
   }
 
+  /**
+   * 訂閱狀態 / 剩餘可開立張數 — GET /c/{cid}/subscription-status →
+   * `{ status, remainingQuantity }`. Read-only; the plan-level quota (distinct
+   * from the 字軌 number ranges reported by {@link listTrackNumbers}). Handy as a
+   * pre-issue quota check and as a wiring smoke test.
+   */
+  async getSubscriptionStatus(): Promise<{
+    status: string;
+    remainingQuantity: number;
+    raw: Record<string, unknown>;
+  }> {
+    const cid = await this.resolveCompanyId();
+    const r = await this.client.receipt<Record<string, unknown>>(
+      "GET",
+      RECEIPT_ENDPOINTS.subscriptionStatus(cid),
+    );
+    return {
+      status: String(r.status ?? ""),
+      remainingQuantity: Number(r.remainingQuantity ?? 0),
+      raw: r,
+    };
+  }
+
+  /**
+   * 常用品項 — list reusable line-item presets (GET /c/{cid}/frequent-items).
+   * Read-only; returns the raw rows.
+   */
+  async listFrequentItems(): Promise<Array<Record<string, unknown>>> {
+    const cid = await this.resolveCompanyId();
+    const res = await this.client.receipt<unknown>("GET", RECEIPT_ENDPOINTS.frequentItems(cid));
+    return toArray(res);
+  }
+
   /** Build the issue payload (Simpany `parseData` shape). */
   private buildIssueBody(input: IssueInvoiceInput, category: string): Record<string, unknown> {
     const opts = (input.providerOptions ?? {}) as SimpanyProviderOptions;

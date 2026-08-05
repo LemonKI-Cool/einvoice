@@ -41,5 +41,10 @@ describe("RECEIPT_ENDPOINTS builders", () => {
       `/c/${c}/track-numbers/${id}/disabled`,
     );
     expect(RECEIPT_ENDPOINTS.importTrackNumbers(c)).toBe(`/c/${c}/track-numbers/import`);
+    expect(RECEIPT_ENDPOINTS.subscriptions(c)).toBe(`/c/${c}/subscriptions`);
+    expect(RECEIPT_ENDPOINTS.subscriptionStatus(c)).toBe(`/c/${c}/subscription-status`);
+    expect(RECEIPT_ENDPOINTS.subscriptionPlans(c)).toBe(`/c/${c}/subscription-plans`);
+    expect(RECEIPT_ENDPOINTS.frequentItems(c)).toBe(`/c/${c}/frequent-items`);
+    expect(RECEIPT_ENDPOINTS.frequentItem(c, id)).toBe(`/c/${c}/frequent-items/${id}`);
   });
 });

@@ -87,4 +87,16 @@ export const RECEIPT_ENDPOINTS = {
     `/c/${c}/track-numbers/${id}/disabled`,
   /** 匯入字軌（POST，multipart csvFile）. */
   importTrackNumbers: (c: string | number) => `/c/${c}/track-numbers/import`,
+  // --- 訂閱方案 / 額度 (subscription & quota) ---
+  /** 訂閱資訊（GET）. */
+  subscriptions: (c: string | number) => `/c/${c}/subscriptions`,
+  /** 訂閱狀態 / 剩餘可開立張數（GET）→ `{ status, remainingQuantity }`. */
+  subscriptionStatus: (c: string | number) => `/c/${c}/subscription-status`,
+  /** 訂閱方案（GET 列出 / POST 訂閱）. */
+  subscriptionPlans: (c: string | number) => `/c/${c}/subscription-plans`,
+  // --- 常用品項 (frequent items) ---
+  /** 常用品項（GET 列出 / POST 新增）. */
+  frequentItems: (c: string | number) => `/c/${c}/frequent-items`,
+  /** 單一常用品項（PATCH 更新 / DELETE 刪除）. */
+  frequentItem: (c: string | number, id: string | number) => `/c/${c}/frequent-items/${id}`,
 } as const;

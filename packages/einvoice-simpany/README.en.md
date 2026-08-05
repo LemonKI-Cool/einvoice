@@ -261,7 +261,18 @@ console.table(
 // 3) list issued invoices (confirms read access)
 const receipts = await provider.listReceipts({ limit: 5 });
 console.log(`read ${receipts.length} invoices`);
+
+// 4) remaining plan quota (subscription level — different from track numbers)
+const quota = await provider.getSubscriptionStatus();
+console.log(`plan ${quota.status}, ${quota.remainingQuantity} left`);
+
+// (optional) reusable line-item presets
+const items = await provider.listFrequentItems();
 ```
+
+> **Two different "remaining":** `listTrackNumbers()` is the **invoice-number** ranges
+> (government-allocated 字軌); `getSubscriptionStatus().remainingQuantity` is the **Simpany
+> plan** quota (how many issues you've paid for).
 
 - `me()` / `listTrackNumbers()` / `listReceipts()` are adapter **extensions** (beyond the
   `InvoiceProvider` interface), for reading/verification only — they mutate nothing.

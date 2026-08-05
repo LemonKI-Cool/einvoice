@@ -245,7 +245,17 @@ console.table(
 // 3) 已開立發票列表(確認可讀取)
 const receipts = await provider.listReceipts({ limit: 5 });
 console.log(`可讀到 ${receipts.length} 張發票`);
+
+// 4) 訂閱方案剩餘可開立張數(額度層級,與字軌不同)
+const quota = await provider.getSubscriptionStatus();
+console.log(`方案狀態 ${quota.status},剩餘 ${quota.remainingQuantity} 張`);
+
+// (選) 常用品項
+const items = await provider.listFrequentItems();
 ```
+
+> **兩種「剩餘」不要混淆**:`listTrackNumbers()` 是**字軌號碼**的可用範圍(財政部配號);
+> `getSubscriptionStatus().remainingQuantity` 是 **Simpany 訂閱方案**的剩餘可開立張數(你買的額度)。
 
 - `me()` / `listTrackNumbers()` / `listReceipts()` 是本 adapter 的**擴充方法**(超出 `InvoiceProvider`
   介面),專供讀取 / 驗證,不會異動任何資料。

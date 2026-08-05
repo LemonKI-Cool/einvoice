@@ -482,6 +482,34 @@ describe("notifyReceipt / printReceipt", () => {
   });
 });
 
+describe("subscription quota / frequent items", () => {
+  it("getSubscriptionStatus returns status + remainingQuantity", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/subscription-status`), () =>
+        rok({ status: "ACTIVE", remainingQuantity: 123 }),
+      ),
+    );
+    const s = await testProvider().getSubscriptionStatus();
+    expect(s).toMatchObject({ status: "ACTIVE", remainingQuantity: 123 });
+    expect(s.raw.remainingQuantity).toBe(123);
+  });
+
+  it("listFrequentItems returns the raw rows", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/frequent-items`), () =>
+        rok([{ id: 1, name: "諮詢費", price: 1000 }]),
+      ),
+    );
+    const items = await testProvider().listFrequentItems();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ name: "諮詢費", price: 1000 });
+  });
+});
+
 describe("resolveCompanyId", () => {
   it("returns config.companyId without calling /me", async () => {
     expect(await testProvider({ companyId: 999 }).resolveCompanyId()).toBe(999);
