@@ -72,4 +72,19 @@ export const RECEIPT_ENDPOINTS = {
   winning: (c: string | number, yearMonth: string) => `/c/${c}/winning-receipts/${yearMonth}`,
   /** 零稅率原因清單. */
   zeroTaxReasons: (c: string | number) => `/c/${c}/receipts/zero-tax-rate-reasons`,
+  // --- 字軌 (invoice number tracks) ---
+  /** 字軌列表（GET，全部）. 每筆含 period / beginNumber / endNumber / lastUsedNumber / quantity. */
+  trackNumbers: (c: string | number) => `/c/${c}/track-numbers`,
+  /** 啟用中的字軌（GET）. */
+  trackNumbersEnabled: (c: string | number) => `/c/${c}/track-numbers/enabled`,
+  /** 單一字軌（PATCH 更新 / DELETE 刪除）. */
+  trackNumber: (c: string | number, id: string | number) => `/c/${c}/track-numbers/${id}`,
+  /** 啟用字軌（PATCH）. */
+  enableTrackNumber: (c: string | number, id: string | number) =>
+    `/c/${c}/track-numbers/${id}/enabled`,
+  /** 停用字軌（PATCH）. */
+  disableTrackNumber: (c: string | number, id: string | number) =>
+    `/c/${c}/track-numbers/${id}/disabled`,
+  /** 匯入字軌（POST，multipart csvFile）. */
+  importTrackNumbers: (c: string | number) => `/c/${c}/track-numbers/import`,
 } as const;

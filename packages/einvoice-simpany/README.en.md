@@ -239,6 +239,38 @@ Apply for / enable it via Simpany's e-invoice service
 ([simpany.co/e-invoice](https://simpany.co/e-invoice)). Once enabled, the same
 account credentials work — no separate account is needed.
 
+## Verifying the integration (read-only, issues nothing)
+
+With an e-invoice-enabled account, these **read-only** calls confirm the whole chain
+(auth → company → permission → routing → response parsing) is wired — **without
+creating any invoice**:
+
+```ts
+const provider = createSimpanyProvider({ account, password });
+
+// 1) account / company / permissions (should include e_receipt)
+const me = await provider.me();
+console.log(me.companies.map((c) => ({ id: c.id, permissions: c.permissions })));
+
+// 2) track numbers: total / used / remaining
+const tracks = await provider.listTrackNumbers();
+console.table(
+  tracks.map((t) => ({ period: t.period, total: t.total, used: t.used, remaining: t.remaining })),
+);
+
+// 3) list issued invoices (confirms read access)
+const receipts = await provider.listReceipts({ limit: 5 });
+console.log(`read ${receipts.length} invoices`);
+```
+
+- `me()` / `listTrackNumbers()` / `listReceipts()` are adapter **extensions** (beyond the
+  `InvoiceProvider` interface), for reading/verification only — they mutate nothing.
+- If the account **isn't enrolled** for e-invoice, these return 404 (→ `NOT_FOUND`) — a
+  permission/enrollment issue, not a wiring bug.
+- `listTrackNumbers()`'s `total` / `used` / `remaining` are computed from `beginNumber` /
+  `endNumber` / `lastUsedNumber` / `quantity` (hand-compiled fields); each row also carries the
+  original `raw`. **If the numbers look wrong, open an issue with the `raw`.**
+
 ## Verification checklist — needs an e-invoice-enabled account (open an issue on mismatch)
 
 1. Issue payload field names / required fields (esp. `customer`, `carrier`, `zeroTaxRateReasonCode`).

@@ -34,8 +34,28 @@ import {
   simpanyTaxType,
   toInvoiceStatus,
   toIssueItem,
+  trackUsage,
   SIMPANY_TAX_TYPE,
+  type TrackNumberUsage,
 } from "./mapping.js";
+
+/** One 字軌 row plus its computed usage (fields raw from Simpany, UNVERIFIED). */
+export interface SimpanyTrackNumber extends TrackNumberUsage {
+  period?: unknown;
+  beginNumber?: unknown;
+  endNumber?: unknown;
+  lastUsedNumber?: unknown;
+  /** The raw track row as returned by Simpany. */
+  raw: Record<string, unknown>;
+}
+
+/** Unwrap a list response to an array — bare `[...]`, `{ data:[...] }`, or `{ list:[...] }`. */
+function toArray(res: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(res)) return res as Array<Record<string, unknown>>;
+  const o = (res ?? {}) as { data?: unknown; list?: unknown };
+  const inner = Array.isArray(o.data) ? o.data : Array.isArray(o.list) ? o.list : [];
+  return inner as Array<Record<string, unknown>>;
+}
 
 const fail = (message: string, code = InvoiceErrorCode.VALIDATION) =>
   new InvoiceError(message, { provider: "simpany", code, rawMessage: message });
@@ -321,6 +341,50 @@ export class SimpanyProvider implements InvoiceProvider {
     }
   }
 
+  // --- read-only helpers (extensions beyond InvoiceProvider) -----------------
+  // Handy to confirm the integration is wired correctly WITHOUT issuing anything:
+  // they exercise auth + company scope + a real receipt-host GET.
+
+  /**
+   * 發票列表 — list issued invoices (raw rows). Pass query params like
+   * `{ status, startDate, endDate, page, limit }`. Read-only.
+   */
+  async listReceipts(
+    query: Record<string, string | number> = {},
+  ): Promise<Array<Record<string, unknown>>> {
+    const cid = await this.resolveCompanyId();
+    const qs = new URLSearchParams(
+      Object.entries(query).map(([k, v]): [string, string] => [k, String(v)]),
+    ).toString();
+    const res = await this.client.receipt<unknown>(
+      "GET",
+      `${RECEIPT_ENDPOINTS.list(cid)}${qs ? `?${qs}` : ""}`,
+    );
+    return toArray(res);
+  }
+
+  /**
+   * 字軌列表 — list this company's invoice-number tracks with computed
+   * total / used / remaining counts. Read-only; the ideal smoke test that the
+   * integration is wired (auth + permission + routing) without issuing anything.
+   * `enabledOnly` uses the `/track-numbers/enabled` endpoint.
+   */
+  async listTrackNumbers(opts: { enabledOnly?: boolean } = {}): Promise<SimpanyTrackNumber[]> {
+    const cid = await this.resolveCompanyId();
+    const path = opts.enabledOnly
+      ? RECEIPT_ENDPOINTS.trackNumbersEnabled(cid)
+      : RECEIPT_ENDPOINTS.trackNumbers(cid);
+    const res = await this.client.receipt<unknown>("GET", path);
+    return toArray(res).map((row) => ({
+      period: row.period,
+      beginNumber: row.beginNumber,
+      endNumber: row.endNumber,
+      lastUsedNumber: row.lastUsedNumber,
+      ...trackUsage(row),
+      raw: row,
+    }));
+  }
+
   /** Build the issue payload (Simpany `parseData` shape). */
   private buildIssueBody(input: IssueInvoiceInput, category: string): Record<string, unknown> {
     const opts = (input.providerOptions ?? {}) as SimpanyProviderOptions;
@@ -366,12 +430,7 @@ export class SimpanyProvider implements InvoiceProvider {
     const cid = await this.resolveCompanyId();
     const path = `${RECEIPT_ENDPOINTS.list(cid)}?keyword=${encodeURIComponent(invoiceNumber)}&limit=25`;
     const res = await this.client.receipt<unknown>("GET", path);
-    const list = Array.isArray(res)
-      ? (res as Array<Record<string, unknown>>)
-      : (((res as { data?: unknown[]; list?: unknown[] })?.data ??
-          (res as { list?: unknown[] })?.list ??
-          []) as Array<Record<string, unknown>>);
-    const found = list.find((x) => String(x.invoiceNumber) === invoiceNumber)?.id;
+    const found = toArray(res).find((x) => String(x.invoiceNumber) === invoiceNumber)?.id;
     if (found == null) {
       throw new InvoiceError(`Simpany receipt ${invoiceNumber} not found`, {
         provider: "simpany",

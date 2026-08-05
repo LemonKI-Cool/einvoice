@@ -398,6 +398,60 @@ describe("query", () => {
   });
 });
 
+describe("read-only helpers", () => {
+  it("listReceipts returns the rows and forwards query params", async () => {
+    let seenUrl = "";
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        seenUrl = request.url;
+        return rok([{ id: 1, invoiceNumber: "AB1" }]);
+      }),
+    );
+    const rows = await testProvider().listReceipts({ status: "ALL", limit: 5 });
+    expect(rows).toHaveLength(1);
+    expect(seenUrl).toContain("status=ALL");
+    expect(seenUrl).toContain("limit=5");
+  });
+
+  it("listTrackNumbers returns rows with computed total/used/remaining", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/track-numbers`), () =>
+        rok([
+          {
+            id: 7,
+            period: "11312",
+            beginNumber: 0,
+            endNumber: 49,
+            lastUsedNumber: 9,
+            quantity: 50,
+          },
+        ]),
+      ),
+    );
+    const tracks = await testProvider().listTrackNumbers();
+    expect(tracks[0]).toMatchObject({ total: 50, used: 10, remaining: 40, period: "11312" });
+    expect(tracks[0]?.raw.id).toBe(7);
+  });
+
+  it("listTrackNumbers({ enabledOnly }) hits the enabled endpoint", async () => {
+    let hit = false;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/track-numbers/enabled`), () => {
+        hit = true;
+        return rok([]);
+      }),
+    );
+    await testProvider().listTrackNumbers({ enabledOnly: true });
+    expect(hit).toBe(true);
+  });
+});
+
 describe("resolveCompanyId", () => {
   it("returns config.companyId without calling /me", async () => {
     expect(await testProvider({ companyId: 999 }).resolveCompanyId()).toBe(999);

@@ -6,6 +6,7 @@ import {
   simpanyTaxType,
   toInvoiceStatus,
   toIssueItem,
+  trackUsage,
 } from "./mapping.js";
 
 describe("simpanyTaxType", () => {
@@ -50,6 +51,38 @@ describe("toIssueItem", () => {
     expect(line).toMatchObject({ name: "A", quantity: 2, price: 50, subTotal: 100 });
     expect(typeof line.uuid).toBe("string");
     expect(line.uuid.length).toBeGreaterThan(0);
+  });
+});
+
+describe("trackUsage", () => {
+  it("uses quantity as the total and counts begin…lastUsed as used", () => {
+    expect(trackUsage({ beginNumber: 0, endNumber: 49, lastUsedNumber: 9, quantity: 50 })).toEqual({
+      total: 50,
+      used: 10,
+      remaining: 40,
+    });
+  });
+
+  it("treats an empty lastUsedNumber as nothing issued", () => {
+    expect(trackUsage({ beginNumber: 0, endNumber: 49, lastUsedNumber: "", quantity: 50 })).toEqual(
+      {
+        total: 50,
+        used: 0,
+        remaining: 50,
+      },
+    );
+  });
+
+  it("falls back to endNumber − beginNumber + 1 when quantity is absent", () => {
+    expect(trackUsage({ beginNumber: 10, endNumber: 19 })).toEqual({
+      total: 10,
+      used: 0,
+      remaining: 10,
+    });
+  });
+
+  it("handles a missing/garbage row without throwing", () => {
+    expect(trackUsage({})).toEqual({ total: 0, used: 0, remaining: 0 });
   });
 });
 

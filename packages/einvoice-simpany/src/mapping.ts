@@ -80,6 +80,36 @@ export function toIssueItem(item: InvoiceItem): {
   };
 }
 
+/** Computed usage of one 字軌 (invoice-number track). */
+export interface TrackNumberUsage {
+  /** Total numbers in the track. */
+  total: number;
+  /** How many have been issued (begin … lastUsedNumber). */
+  used: number;
+  /** total − used. */
+  remaining: number;
+}
+
+/**
+ * Derive total / used / remaining from a track row's `beginNumber` / `endNumber` /
+ * `lastUsedNumber` / `quantity` (field names UNVERIFIED). `total` prefers `quantity`,
+ * else `endNumber − beginNumber + 1`; `used` counts `beginNumber … lastUsedNumber`.
+ */
+export function trackUsage(row: Record<string, unknown>): TrackNumberUsage {
+  const num = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const begin = num(row.beginNumber);
+  const end = num(row.endNumber);
+  const last = num(row.lastUsedNumber);
+  const qty = num(row.quantity);
+  const total = qty ?? (begin != null && end != null ? end - begin + 1 : 0);
+  const used = last != null && begin != null ? Math.max(0, last - begin + 1) : 0;
+  return { total, used, remaining: Math.max(0, total - used) };
+}
+
 /** Simpany `status` → unified {@link InvoiceStatus}. */
 export function toInvoiceStatus(status: unknown): InvoiceStatus {
   const s = String(status ?? "").toUpperCase();

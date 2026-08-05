@@ -33,5 +33,13 @@ describe("RECEIPT_ENDPOINTS builders", () => {
     expect(RECEIPT_ENDPOINTS.export(c)).toBe(`/c/${c}/receipts/export`);
     expect(RECEIPT_ENDPOINTS.winning(c, "2026-07")).toBe(`/c/${c}/winning-receipts/2026-07`);
     expect(RECEIPT_ENDPOINTS.zeroTaxReasons(c)).toBe(`/c/${c}/receipts/zero-tax-rate-reasons`);
+    expect(RECEIPT_ENDPOINTS.trackNumbers(c)).toBe(`/c/${c}/track-numbers`);
+    expect(RECEIPT_ENDPOINTS.trackNumbersEnabled(c)).toBe(`/c/${c}/track-numbers/enabled`);
+    expect(RECEIPT_ENDPOINTS.trackNumber(c, id)).toBe(`/c/${c}/track-numbers/${id}`);
+    expect(RECEIPT_ENDPOINTS.enableTrackNumber(c, id)).toBe(`/c/${c}/track-numbers/${id}/enabled`);
+    expect(RECEIPT_ENDPOINTS.disableTrackNumber(c, id)).toBe(
+      `/c/${c}/track-numbers/${id}/disabled`,
+    );
+    expect(RECEIPT_ENDPOINTS.importTrackNumbers(c)).toBe(`/c/${c}/track-numbers/import`);
   });
 });

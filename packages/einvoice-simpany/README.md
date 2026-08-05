@@ -224,6 +224,36 @@ await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "開錯", provid
 申請 / 開通請洽 Simpany 電子發票服務([simpany.co/e-invoice](https://simpany.co/e-invoice))。
 開通後以同一組帳號登入即可操作(不需另建帳號)。
 
+## 如何驗證串接是否正確(唯讀,不會開發票)
+
+有了「已開通電子發票」的帳號後,用下列**唯讀**呼叫即可確認整條(認證 → 公司 → 權限 → 路由 →
+回應解析)串對——**完全不會產生任何發票**:
+
+```ts
+const provider = createSimpanyProvider({ account, password });
+
+// 1) 帳號 / 公司 / 權限(permissions 應含 e_receipt)
+const me = await provider.me();
+console.log(me.companies.map((c) => ({ id: c.id, permissions: c.permissions })));
+
+// 2) 字軌:總量 / 已開立 / 剩餘
+const tracks = await provider.listTrackNumbers();
+console.table(
+  tracks.map((t) => ({ period: t.period, total: t.total, used: t.used, remaining: t.remaining })),
+);
+
+// 3) 已開立發票列表(確認可讀取)
+const receipts = await provider.listReceipts({ limit: 5 });
+console.log(`可讀到 ${receipts.length} 張發票`);
+```
+
+- `me()` / `listTrackNumbers()` / `listReceipts()` 是本 adapter 的**擴充方法**(超出 `InvoiceProvider`
+  介面),專供讀取 / 驗證,不會異動任何資料。
+- 若帳號**尚未開通電子發票**,這些呼叫會回 404(→ `NOT_FOUND`)——那是權限 / 開通問題,不是串接錯誤。
+- `listTrackNumbers()` 的 `total` / `used` / `remaining` 由 `beginNumber` / `endNumber` /
+  `lastUsedNumber` / `quantity` 計算(欄位屬人工整理);每筆也帶原始 `raw`。**若數字對不上,請發 issue
+  並附上 `raw`。**
+
 ## 待驗證清單(需「已開通電子發票」的帳號;接手的人請優先確認,對不上就發 issue)
 
 1. 開立 payload 的欄位名與必填(尤其 `customer`、`carrier`、`zeroTaxRateReasonCode`)。
