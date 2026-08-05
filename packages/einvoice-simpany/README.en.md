@@ -257,6 +257,30 @@ SIMPANY_LIVE=1 SIMPANY_ACCOUNT=… SIMPANY_PASSWORD=… \
   pnpm exec vitest run packages/einvoice-simpany/src/__tests__/live
 ```
 
+## Contributing
+
+The e-invoice operations are hand-compiled and untested against the live API — the
+most valuable contribution is to **verify them with an e-invoice-enabled account and
+report back**.
+
+- **Report a discrepancy (open an issue)** — work through the verification checklist
+  above and include (⚠️ **redact tokens / emails / 統編 / buyer info first**):
+  1. the operation (`issue` / `void` / `allowance` / …) and the unified input you passed;
+  2. the request the adapter actually sent (endpoint + body) and Simpany's response;
+  3. expected vs actual result.
+- **Submit a fix (PR)** — once you've confirmed an item, please also:
+  1. update the relevant `endpoints.ts` / `provider.ts` / `mapping.ts`;
+  2. move the item from the verification checklist to "cross-checked" and drop the
+     matching UNVERIFIED / "hand-compiled" wording;
+  3. update or add MSW tests (`src/__tests__/`) using the real (redacted) shapes so the
+     tests reflect reality;
+  4. run the full gate before pushing:
+     `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test`.
+- **Live tests** — `src/__tests__/live.test.ts` currently covers only the auth layer
+  (`SIMPANY_LIVE=1`). Live issue/void/allowance tests are welcome — note they create
+  **real invoices**, so use a test-mode / test account.
+- Once verified and stable, drop `private: true` from `package.json` to publish.
+
 ## Disclaimer
 
 This adapter is provided as-is. Before using it, make sure your usage complies

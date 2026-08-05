@@ -242,6 +242,26 @@ SIMPANY_LIVE=1 SIMPANY_ACCOUNT=… SIMPANY_PASSWORD=… \
   pnpm exec vitest run packages/einvoice-simpany/src/__tests__/live
 ```
 
+## 貢獻(Contributing)
+
+本 adapter 的發票操作是人工整理、尚未實測——**最有價值的貢獻,就是用「已開通電子發票的帳號」
+實測並回報**。
+
+- **回報不符(開 issue)**:對照上方「待驗證清單」逐項確認,並附上(⚠️ **務必先遮蔽 token /
+  email / 統編 / 買受人等敏感資料**):
+  1. 操作(`issue` / `void` / `allowance` / …)與你傳入的 unified 輸入;
+  2. adapter 實際送出的 request(端點 + body)與 Simpany 的 response;
+  3. 預期 vs 實際結果。
+- **送修正(PR)**:確認某項後,請一併:
+  1. 更新對應的 `endpoints.ts` / `provider.ts` / `mapping.ts`;
+  2. 把該項從「待驗證清單」移到「已交叉驗證」,並移除對應的 UNVERIFIED / 「人工整理」字樣;
+  3. 以(遮蔽後的)真實封包更新或新增 MSW 測試(`src/__tests__/`),讓測試反映實際格式;
+  4. 送出前跑過完整閘門:
+     `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test`。
+- **Live 測試**:`src/__tests__/live.test.ts` 目前只涵蓋登入層(`SIMPANY_LIVE=1`)。歡迎補上有權限
+  帳號的開立/作廢/折讓 live 測試——注意這會產生**真實發票**,請使用測試模式 / 測試帳號。
+- 驗證通過、操作穩定後,即可移除 `package.json` 的 `private: true` 對外發佈。
+
 ## 免責聲明
 
 本套件依現狀（as-is）提供。使用前請務必自行確認你的使用方式符合相關法規、電子發票 /
