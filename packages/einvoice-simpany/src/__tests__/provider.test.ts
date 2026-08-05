@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Capability, CarrierType, PriceMode, TaxType, supports } from "@paid-tw/einvoice";
-import { okLogin, okMe, rerror, rok, rurl, server, testProvider, url } from "./server.js";
+import { okLogin, okMe, rerror, rok, rpdf, rurl, server, testProvider, url } from "./server.js";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
@@ -449,6 +449,36 @@ describe("read-only helpers", () => {
     );
     await testProvider().listTrackNumbers({ enabledOnly: true });
     expect(hit).toBe(true);
+  });
+});
+
+describe("notifyReceipt / printReceipt", () => {
+  it("notifyReceipt POSTs the corrected emails to the notifications endpoint", async () => {
+    let body: any;
+    server.use(
+      login(),
+      me(),
+      http.post(rurl(`/c/${CID}/receipts/900/notifications`), async ({ request }) => {
+        body = await request.json();
+        return rok({ ok: true });
+      }),
+    );
+    await testProvider().notifyReceipt("AB12345678", ["fixed@example.com"], { receiptId: 900 });
+    expect(body).toEqual({ emails: ["fixed@example.com"] });
+  });
+
+  it("printReceipt returns the PDF bytes + content-type", async () => {
+    server.use(
+      login(),
+      me(),
+      http.post(rurl(`/c/${CID}/receipts/900/print`), () => rpdf([0x25, 0x50, 0x44, 0x46])),
+    );
+    const res = await testProvider().printReceipt("AB12345678", {
+      receiptId: 900,
+      format: "FORMAT_A4",
+    });
+    expect(res.contentType).toContain("application/pdf");
+    expect(Array.from(res.data)).toEqual([0x25, 0x50, 0x44, 0x46]); // %PDF
   });
 });
 

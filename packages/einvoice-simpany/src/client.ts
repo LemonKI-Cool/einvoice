@@ -228,4 +228,92 @@ export class SimpanyClient {
     // Success: prefer the `data` envelope field; fall back to the whole body.
     return (env.data !== undefined ? env.data : (env as unknown as T)) as T;
   }
+
+  /**
+   * Authenticated BINARY call to the receipt host — for endpoints that stream a
+   * PDF (invoice/allowance proof) instead of JSON. Returns the bytes + content
+   * type on success; on failure the API replies with a JSON envelope, which is
+   * thrown as an {@link InvoiceError}. Re-logs in once on a 401 like the others.
+   */
+  async receiptFile(
+    method: string,
+    path: string,
+    body?: Record<string, unknown>,
+  ): Promise<{ contentType: string; data: Uint8Array }> {
+    await this.ensureToken();
+    try {
+      return await this.transportFile(method, path, body, this.token);
+    } catch (err) {
+      if (
+        err instanceof InvoiceError &&
+        err.code === InvoiceErrorCode.AUTH &&
+        this.config.password
+      ) {
+        await this.login();
+        return this.transportFile(method, path, body, this.token);
+      }
+      throw err;
+    }
+  }
+
+  private async transportFile(
+    method: string,
+    path: string,
+    body: Record<string, unknown> | undefined,
+    bearer?: string,
+  ): Promise<{ contentType: string; data: Uint8Array }> {
+    const doFetch = this.config.fetch ?? fetch;
+    const base = resolveReceiptBaseUrl(this.config);
+    const headers: Record<string, string> = {
+      accept: "application/pdf, application/json",
+      "x-requested-with": "XMLHttpRequest",
+    };
+    if (body !== undefined) headers["content-type"] = "application/json";
+    if (bearer) headers.authorization = `Bearer ${bearer}`;
+
+    let res: Response;
+    try {
+      res = await tracedFetch(
+        { provider: "simpany", debug: this.config.debug, fetch: doFetch },
+        `${base}${path}`,
+        {
+          method,
+          headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: this.config.timeoutMs ? AbortSignal.timeout(this.config.timeoutMs) : undefined,
+        },
+      );
+    } catch (cause) {
+      throw new InvoiceError("Simpany request failed", {
+        provider: "simpany",
+        code: InvoiceErrorCode.NETWORK,
+        cause,
+      });
+    }
+
+    const ct = res.headers.get("content-type") ?? "";
+    // A JSON body (or a non-2xx) is an error envelope, not a file.
+    if (!res.ok || ct.includes("application/json")) {
+      const raw = await res.text();
+      let env: SimpanyEnvelope = {};
+      try {
+        env = raw ? (JSON.parse(raw) as SimpanyEnvelope) : {};
+      } catch {
+        // non-JSON error body — fall through with an empty envelope
+      }
+      const message =
+        env.error?.title || env.error?.message || env.message || `Simpany error ${res.status}`;
+      throw new InvoiceError(message, {
+        provider: "simpany",
+        code: res.ok ? InvoiceErrorCode.VALIDATION : mapSimpanyError(res.status, env.code),
+        rawCode: String(env.code ?? res.status),
+        rawMessage: message,
+        raw: env,
+      });
+    }
+    return {
+      contentType: ct || "application/octet-stream",
+      data: new Uint8Array(await res.arrayBuffer()),
+    };
+  }
 }

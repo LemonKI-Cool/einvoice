@@ -1,7 +1,18 @@
 import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SimpanyClient, mapSimpanyError } from "../index.js";
-import { fail, ok, okLogin, okMe, rframeworkError, rok, rurl, server, url } from "./server.js";
+import {
+  fail,
+  ok,
+  okLogin,
+  okMe,
+  rframeworkError,
+  rok,
+  rpdf,
+  rurl,
+  server,
+  url,
+} from "./server.js";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
@@ -214,6 +225,43 @@ describe("receipt host (member2)", () => {
     await expect(
       client().receipt("POST", "/c/3432/receipts/b2c", { customId: "x" }),
     ).rejects.toMatchObject({ code: "VALIDATION", rawCode: "422" });
+  });
+
+  it("receiptFile returns bytes on a binary response", async () => {
+    server.use(
+      http.post(url("/login"), () => okLogin()),
+      http.post(rurl("/c/3432/receipts/900/print"), () => rpdf([0x25, 0x50, 0x44, 0x46])),
+    );
+    const res = await client().receiptFile("POST", "/c/3432/receipts/900/print", {});
+    expect(res.contentType).toContain("application/pdf");
+    expect(Array.from(res.data)).toEqual([0x25, 0x50, 0x44, 0x46]);
+  });
+
+  it("receiptFile throws the JSON error envelope on failure", async () => {
+    server.use(
+      http.post(url("/login"), () => okLogin()),
+      http.post(rurl("/c/3432/receipts/900/print"), () => rframeworkError("not found", 404)),
+    );
+    await expect(
+      client().receiptFile("POST", "/c/3432/receipts/900/print", {}),
+    ).rejects.toMatchObject({ code: "NOT_FOUND", rawCode: "404" });
+  });
+
+  it("receiptFile re-logs in once on a 401 then returns bytes", async () => {
+    let logins = 0;
+    let calls = 0;
+    server.use(
+      http.post(url("/login"), () => {
+        logins++;
+        return okLogin(`TOK${logins}`);
+      }),
+      http.post(rurl("/c/3432/receipts/900/print"), () =>
+        ++calls === 1 ? fail(401, "expired") : rpdf(),
+      ),
+    );
+    const res = await client().receiptFile("POST", "/c/3432/receipts/900/print", {});
+    expect(res.contentType).toContain("application/pdf");
+    expect(logins).toBe(2);
   });
 
   it("honours a receiptBaseUrl override", async () => {

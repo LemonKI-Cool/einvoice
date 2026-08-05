@@ -271,6 +271,32 @@ console.log(`read ${receipts.length} invoices`);
   `endNumber` / `lastUsedNumber` / `quantity` (hand-compiled fields); each row also carries the
   original `raw`. **If the numbers look wrong, open an issue with the `raw`.**
 
+## Resend a notification / download the invoice PDF
+
+When a consumer mistyped their email at checkout and didn't get the invoice, you can
+**resend it to a corrected address**, or **download the proof PDF** to send/print yourself:
+
+```ts
+// resend (to a corrected email; multiple allowed)
+await provider.notifyReceipt("AB12345678", ["fixed@example.com"], { receiptId });
+
+// download the invoice proof PDF (returns bytes)
+const { contentType, data } = await provider.printReceipt("AB12345678", {
+  receiptId,
+  format: "FORMAT_A4",
+});
+```
+
+- Both are adapter **extensions** (not in the `InvoiceProvider` interface; mirroring
+  ezreceipt's `notifyInvoice` / `printInvoice`).
+- Simpany also has a **login-free consumer view page**,
+  `https://member2.simpany.co/consumer/receipts/{ref}/{token}` — `ref` is a timestamp
+  (`R + YYMMDD + HHMMSS + seq`) and `token` is a per-invoice capability secret.
+  ⚠️ **This link means "anyone with the link can see that invoice's personal data" — treat
+  it as a secret: never log it or place it on an indexable page** (such links have been
+  observed indexed by search engines). Whether the issue/detail response exposes this token
+  is to be confirmed with an enabled account.
+
 ## Verification checklist — needs an e-invoice-enabled account (open an issue on mismatch)
 
 1. Issue payload field names / required fields (esp. `customer`, `carrier`, `zeroTaxRateReasonCode`).

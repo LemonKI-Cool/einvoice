@@ -54,6 +54,10 @@ export const rok = (data: unknown) => HttpResponse.json({ data });
 export const rerror = (title = "發票內容有誤") =>
   HttpResponse.json({ status: "error", error: { title } });
 
+/** A binary PDF response (for print/proof endpoints). Defaults to a `%PDF` stub. */
+export const rpdf = (bytes: number[] = [0x25, 0x50, 0x44, 0x46]) =>
+  new HttpResponse(new Uint8Array(bytes), { headers: { "content-type": "application/pdf" } });
+
 /**
  * A framework-style error body `{ message, errors? }` at an HTTP error status.
  * This is the REAL shape observed (read-only) from the receipt host — e.g. a 404

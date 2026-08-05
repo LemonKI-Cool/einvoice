@@ -254,6 +254,27 @@ console.log(`可讀到 ${receipts.length} 張發票`);
   `lastUsedNumber` / `quantity` 計算(欄位屬人工整理);每筆也帶原始 `raw`。**若數字對不上,請發 issue
   並附上 `raw`。**
 
+## 補寄通知信 / 下載發票 PDF
+
+消費者結帳時 email 填錯、沒收到發票時,可**補寄到更正後的信箱**,或**下載證明聯 PDF** 自行寄送 / 列印:
+
+```ts
+// 補寄(可寄到更正後的 email;支援多組)
+await provider.notifyReceipt("AB12345678", ["fixed@example.com"], { receiptId });
+
+// 下載發票證明聯 PDF(回傳 bytes)
+const { contentType, data } = await provider.printReceipt("AB12345678", {
+  receiptId,
+  format: "FORMAT_A4",
+});
+```
+
+- 兩者同為 adapter **擴充方法**(不在 `InvoiceProvider` 介面內;比照 ezreceipt 的 `notifyInvoice` / `printInvoice`)。
+- Simpany 另有**免登入的消費者檢視頁**,格式 `https://member2.simpany.co/consumer/receipts/{ref}/{token}`
+  ——`ref` 為 `R + YYMMDD + HHMMSS + 序號` 時間戳,`token` 是每張發票的能力密鑰。
+  ⚠️ **此連結等於「有連結即可看到該發票的個資」,請當機密處理:勿記錄、勿放進會被索引的頁面**
+  (實務上已觀察到此類連結被搜尋引擎索引)。開立 / 明細回應是否直接提供該 token,待有權限帳號確認。
+
 ## 待驗證清單(需「已開通電子發票」的帳號;接手的人請優先確認,對不上就發 issue)
 
 1. 開立 payload 的欄位名與必填(尤其 `customer`、`carrier`、`zeroTaxRateReasonCode`)。

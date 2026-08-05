@@ -385,6 +385,39 @@ export class SimpanyProvider implements InvoiceProvider {
     }));
   }
 
+  /**
+   * 補寄 / 寄送發票通知信 — POST /c/{cid}/receipts/{id}/notifications `{ emails }`.
+   * The rescue path when a consumer gave a wrong email at checkout: re-send the
+   * invoice to a corrected address. Pass `providerOptions.receiptId` (from an
+   * issue result's `raw.id`) to skip the invoice-number lookup.
+   */
+  async notifyReceipt(
+    invoiceNumber: string,
+    emails: string[],
+    opts: { receiptId?: string | number } = {},
+  ): Promise<void> {
+    const cid = await this.resolveCompanyId();
+    const receiptId = await this.resolveReceiptId(invoiceNumber, { receiptId: opts.receiptId });
+    await this.client.receipt("POST", RECEIPT_ENDPOINTS.notify(cid, receiptId), { emails });
+  }
+
+  /**
+   * 下載發票證明聯 PDF — POST /c/{cid}/receipts/{id}/print. Returns the raw PDF
+   * bytes + content type. `format` (e.g. `"FORMAT_A4"`) and `reprint` are passed
+   * through; `reprint` marks it as a 補印本.
+   */
+  async printReceipt(
+    invoiceNumber: string,
+    opts: { receiptId?: string | number; format?: string; reprint?: boolean } = {},
+  ): Promise<{ contentType: string; data: Uint8Array }> {
+    const cid = await this.resolveCompanyId();
+    const receiptId = await this.resolveReceiptId(invoiceNumber, { receiptId: opts.receiptId });
+    return this.client.receiptFile("POST", RECEIPT_ENDPOINTS.print(cid, receiptId), {
+      ...(opts.format ? { format: opts.format } : {}),
+      ...(opts.reprint != null ? { isReprint: opts.reprint } : {}),
+    });
+  }
+
   /** Build the issue payload (Simpany `parseData` shape). */
   private buildIssueBody(input: IssueInvoiceInput, category: string): Record<string, unknown> {
     const opts = (input.providerOptions ?? {}) as SimpanyProviderOptions;
