@@ -1,6 +1,6 @@
 import { http } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { Capability, PriceMode, TaxType, supports } from "@paid-tw/einvoice";
+import { Capability, CarrierType, PriceMode, TaxType, supports } from "@paid-tw/einvoice";
 import { okLogin, okMe, rerror, rok, rurl, server, testProvider, url } from "./server.js";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -107,6 +107,79 @@ describe("issue", () => {
       code: "VALIDATION",
       provider: "simpany",
     });
+  });
+});
+
+describe("issue validation (local pre-flight)", () => {
+  it("requires buyer.email", async () => {
+    await expect(
+      testProvider().issue(issueInput({ buyer: { name: "買受人" } })),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("requires buyer.name for B2B", async () => {
+    await expect(
+      testProvider().issue(issueInput({ buyer: { ubn: "22099131", email: "b@e.com" } })),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("rejects an item quantity above 999999", async () => {
+    await expect(
+      testProvider().issue(
+        issueInput({ items: [{ description: "x", quantity: 1_000_000, unitPrice: 1, amount: 1 }] }),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("rejects a unitPrice above 99999999", async () => {
+    await expect(
+      testProvider().issue(
+        issueInput({
+          items: [{ description: "x", quantity: 1, unitPrice: 100_000_000, amount: 100_000_000 }],
+          amount: { salesAmount: 100_000_000, taxAmount: 0, totalAmount: 100_000_000 },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("requires zeroTaxRateReasonCode for a zero-rated invoice", async () => {
+    await expect(
+      testProvider().issue(
+        issueInput({
+          taxType: TaxType.ZERO_RATED,
+          amount: { salesAmount: 100, taxAmount: 0, totalAmount: 100 },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("rejects a malformed citizen-certificate carrier code", async () => {
+    await expect(
+      testProvider().issue(
+        issueInput({ carrier: { type: CarrierType.CITIZEN_CERTIFICATE, code: "BAD" } }),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("bypasses local validation when validatePayload is false", async () => {
+    let hit = false;
+    server.use(
+      login(),
+      http.post(rurl(`/c/${CID}/receipts/b2c`), () => {
+        hit = true;
+        return rok({
+          id: 1,
+          invoiceNumber: "AB1",
+          randomNumber: "0001",
+          issuedAt: "2026-08-05 10:00:00",
+        });
+      }),
+    );
+    // Missing email would normally fail — but validatePayload:false skips the check.
+    await testProvider({ companyId: CID, validatePayload: false }).issue(
+      issueInput({ buyer: { name: "買受人" } }),
+    );
+    expect(hit).toBe(true);
   });
 });
 

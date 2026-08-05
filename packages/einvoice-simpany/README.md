@@ -38,6 +38,35 @@ Simpany 沒有公開的開發者 API,以下是我們人工整理的形狀(可能
 - **能力**:宣告 ISSUE / VOID / ALLOWANCE / VOID_ALLOWANCE / QUERY / B2B。**不支援**
   MIXED_TAX(稅別為發票層級)、FOREIGN_CURRENCY、CARRIER_VALIDATION(前端無此端點)。
 
+## 開立欄位對照與必填規則
+
+`POST /c/{cid}/receipts/{b2b|b2c}`(依買方有無統編決定 b2b/b2c)。下表的必填 / 格式來自
+開立表單的前端驗證,**伺服器端合約尚未驗證**;adapter 會在送出前做同樣的本地檢查
+(可用 `validatePayload: false` 關閉)。
+
+| wire 欄位 | 中文 | 必填 | 規則 / 值 | unified 對應 |
+|---|---|---|---|---|
+| `customId` | 自訂單號 | 選填 | 任意字串 | `orderId` |
+| `customer.vat` | 買方統編 | B2B 必填 | 8 碼 | `buyer.ubn` |
+| `customer.name` | 買受人名稱 | B2B 必填 | ≤255 | `buyer.name` |
+| `customer.address` | 買方地址 | 選填 | — | `buyer.address` |
+| `customer.emails` | 通知信箱 | **必填** | email(可多組) | `buyer.email` |
+| `taxType` | 課稅別 | 必填 | `TAXABLE` / `ZERO_TAX_RATE` / `EXEMPTION` | `taxType` |
+| `isTaxIncluded` | 含稅價 | 必填 | boolean | `priceMode` |
+| `items[].name` | 品名 | 必填 | ≤255 | `item.description` |
+| `items[].quantity` | 數量 | 必填 | 1–999999 | `item.quantity` |
+| `items[].price` | 單價 | 必填 | 0–99999999 | `item.unitPrice` |
+| `items[].subTotal` | 小計 | 必填 | =數量×單價 | `item.amount` |
+| `carrier.type` | 載具類別 | B2C 必填 | `NO_CARRIER`/`MOBILE_BARCODE`/`CITIZEN_DIGITAL_CERTIFICATE`/`MEMBERSHIP` | `carrier.type` |
+| `carrier.number` | 載具號碼 | 視載具 | 手機條碼 `/`+7 碼;自然人憑證 16 碼(2 英+14 數) | `carrier.code` |
+| `npoBan` | 捐贈碼 | B2C+捐贈時必填 | 3–7 碼 | `donation.npoban` |
+| `zeroTaxRateReasonCode` | 零稅率原因 | 零稅率必填 | 代碼(見 `zero-tax-rate-reasons`) | `providerOptions` |
+| `customsClearanceType` | 通關方式 | 零稅率必填 | `NOT_VIA_CUSTOMS` / `VIA_CUSTOMS` | `providerOptions` |
+| `remark` | 備註 | 選填 | — | `remark` |
+| `shouldAdjustTaxAmount` | 稅額調整 | 選填 | boolean(B2B ±1) | `providerOptions` |
+
+> 注意:表單**不提供指定開立日期**(由伺服器當下開立),故 unified 的 `date` 對 Simpany 無效。
+
 ## 用法
 
 ```ts

@@ -45,6 +45,36 @@ be inaccurate:
   NOT supported: MIXED_TAX (tax type is invoice-level), FOREIGN_CURRENCY,
   CARRIER_VALIDATION (no such endpoint in the client).
 
+## Issue fields & required rules
+
+`POST /c/{cid}/receipts/{b2b|b2c}`. Required/format below come from the issue
+form's client-side validation (**server contract unverified**); the adapter runs
+the same checks locally before sending (disable with `validatePayload: false`).
+
+| wire field | required | rule / values | unified |
+|---|---|---|---|
+| `customId` | optional | any string | `orderId` |
+| `customer.vat` | B2B only | 8 digits | `buyer.ubn` |
+| `customer.name` | B2B only | ≤255 | `buyer.name` |
+| `customer.address` | optional | — | `buyer.address` |
+| `customer.emails` | **required** | email (multiple allowed) | `buyer.email` |
+| `taxType` | required | `TAXABLE` / `ZERO_TAX_RATE` / `EXEMPTION` | `taxType` |
+| `isTaxIncluded` | required | boolean | `priceMode` |
+| `items[].name` | required | ≤255 | `item.description` |
+| `items[].quantity` | required | 1–999999 | `item.quantity` |
+| `items[].price` | required | 0–99999999 | `item.unitPrice` |
+| `items[].subTotal` | required | = quantity × price | `item.amount` |
+| `carrier.type` | B2C | `NO_CARRIER`/`MOBILE_BARCODE`/`CITIZEN_DIGITAL_CERTIFICATE`/`MEMBERSHIP` | `carrier.type` |
+| `carrier.number` | per type | mobile `/`+7 chars; citizen-cert 16 chars (2 letters + 14 digits) | `carrier.code` |
+| `npoBan` | B2C + donate | 3–7 digits | `donation.npoban` |
+| `zeroTaxRateReasonCode` | zero-rate | code (see `zero-tax-rate-reasons`) | `providerOptions` |
+| `customsClearanceType` | zero-rate | `NOT_VIA_CUSTOMS` / `VIA_CUSTOMS` | `providerOptions` |
+| `remark` | optional | — | `remark` |
+| `shouldAdjustTaxAmount` | optional | boolean (B2B ±1) | `providerOptions` |
+
+> Note: the form offers no issue-date field (the server issues at "now"), so the
+> unified `date` has no effect on Simpany.
+
 ## Usage
 
 ```ts

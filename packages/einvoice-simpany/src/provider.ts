@@ -1,8 +1,10 @@
 import {
   Capability,
+  CarrierType,
   InvoiceError,
   InvoiceErrorCode,
   InvoiceStatus,
+  TaxType,
   allowanceInputSchema,
   deriveCategory,
   issueInvoiceInputSchema,
@@ -132,8 +134,9 @@ export class SimpanyProvider implements InvoiceProvider {
   /** 開立發票. `POST /c/{companyId}/receipts/{b2b|b2c}`. */
   async issue(input: IssueInvoiceInput): Promise<IssueInvoiceResult> {
     parseInput(issueInvoiceInputSchema, input, "simpany");
-    const cid = await this.resolveCompanyId();
     const category = input.category ?? deriveCategory(input.buyer); // "B2B" | "B2C"
+    if (this.config.validatePayload !== false) this.validateIssue(input, category);
+    const cid = await this.resolveCompanyId();
     const body = this.buildIssueBody(input, category);
     const r = await this.client.receipt<Record<string, unknown>>(
       "POST",
@@ -268,6 +271,54 @@ export class SimpanyProvider implements InvoiceProvider {
       })),
       raw: r,
     };
+  }
+
+  /**
+   * Local pre-flight validation for issue, mirroring the web form's rules
+   * (client-side; the server contract is UNVERIFIED). Toggle off with
+   * `config.validatePayload === false`. Throws `InvoiceError(VALIDATION)`.
+   */
+  private validateIssue(input: IssueInvoiceInput, category: string): void {
+    if (category === "B2B" && !input.buyer.name) {
+      throw fail("Simpany B2B issue requires buyer.name");
+    }
+    // The web form requires an email on every issue (the notification recipient).
+    if (!input.buyer.email) {
+      throw fail("Simpany issue requires buyer.email (the invoice notification recipient)");
+    }
+    input.items.forEach((it, i) => {
+      if (it.description.length > 255) throw fail(`item #${i}: description exceeds 255 chars`);
+      if (!(it.quantity >= 1 && it.quantity <= 999999)) {
+        throw fail(`item #${i}: quantity must be between 1 and 999999`);
+      }
+      if (!(it.unitPrice >= 0 && it.unitPrice <= 99_999_999)) {
+        throw fail(`item #${i}: unitPrice must be between 0 and 99999999`);
+      }
+    });
+    if (input.carrier) {
+      const code = input.carrier.code ?? "";
+      if (input.carrier.type === CarrierType.MOBILE_BARCODE && !/^\/[0-9A-Z+.-]{7}$/.test(code)) {
+        throw fail("mobile-barcode carrier.code must be '/' + 7 chars of [0-9 A-Z + . -]");
+      }
+      if (
+        input.carrier.type === CarrierType.CITIZEN_CERTIFICATE &&
+        !/^[A-Z]{2}[0-9]{14}$/.test(code)
+      ) {
+        throw fail("citizen-certificate carrier.code must be 2 letters + 14 digits (16 chars)");
+      }
+    }
+    if (input.taxType === TaxType.ZERO_RATED) {
+      const opts = (input.providerOptions ?? {}) as SimpanyProviderOptions;
+      if (!opts.zeroTaxRateReasonCode) {
+        throw fail(
+          "zero-rated issue requires providerOptions.zeroTaxRateReasonCode " +
+            "(valid codes come from the receipts/zero-tax-rate-reasons endpoint)",
+        );
+      }
+    }
+    if (category === "B2C" && input.donation && !/^\d{3,7}$/.test(input.donation.npoban)) {
+      throw fail("donation.npoban (愛心碼) must be 3–7 digits");
+    }
   }
 
   /** Build the issue payload (Simpany `parseData` shape). */
