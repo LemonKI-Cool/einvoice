@@ -53,3 +53,11 @@ export const rok = (data: unknown) => HttpResponse.json({ data });
 /** A receipt business-error envelope (HTTP 200, `status:"error"`). */
 export const rerror = (title = "發票內容有誤") =>
   HttpResponse.json({ status: "error", error: { title } });
+
+/**
+ * A framework-style error body `{ message, errors? }` at an HTTP error status.
+ * This is the REAL shape observed (read-only) from the receipt host — e.g. a 404
+ * route-model-binding failure when the company isn't enrolled for e-invoice.
+ */
+export const rframeworkError = (message: string, status = 404, errors?: Record<string, unknown>) =>
+  HttpResponse.json(errors ? { message, errors } : { message }, { status });

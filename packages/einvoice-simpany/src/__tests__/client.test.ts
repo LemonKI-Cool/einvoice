@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SimpanyClient, mapSimpanyError } from "../index.js";
-import { fail, ok, okLogin, okMe, rok, rurl, server, url } from "./server.js";
+import { fail, ok, okLogin, okMe, rframeworkError, rok, rurl, server, url } from "./server.js";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
@@ -188,6 +188,32 @@ describe("receipt host (member2)", () => {
     await expect(
       client().receipt("POST", "/c/3432/receipts/b2c", { customId: "x" }),
     ).rejects.toMatchObject({ code: "VALIDATION", rawMessage: "發票內容有誤" });
+  });
+
+  it("maps a framework-style { message } 404 to NOT_FOUND, preserving the message", async () => {
+    // The real shape observed (read-only) from the receipt host when the company
+    // isn't enrolled for e-invoice: a 404 with a framework-style `{ message }` body.
+    server.use(
+      http.post(url("/login"), () => okLogin()),
+      http.get(rurl("/c/3432/receipts"), () => rframeworkError("No query results for model 3432")),
+    );
+    await expect(client().receipt("GET", "/c/3432/receipts")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      rawCode: "404",
+      rawMessage: "No query results for model 3432",
+    });
+  });
+
+  it("maps a framework-style 422 { message, errors } to VALIDATION", async () => {
+    server.use(
+      http.post(url("/login"), () => okLogin()),
+      http.post(rurl("/c/3432/receipts/b2c"), () =>
+        rframeworkError("The given data was invalid.", 422, { "customer.vat": ["invalid"] }),
+      ),
+    );
+    await expect(
+      client().receipt("POST", "/c/3432/receipts/b2c", { customId: "x" }),
+    ).rejects.toMatchObject({ code: "VALIDATION", rawCode: "422" });
   });
 
   it("honours a receiptBaseUrl override", async () => {

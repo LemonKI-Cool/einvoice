@@ -69,12 +69,20 @@ await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "開錯", provid
 `zeroTaxRateReasonCode` / `customsClearanceType`(零稅率用)、`shouldAdjustTaxAmount`(B2B ±1 稅額調整)、
 `items`(直接指定折讓品項 `[{id,quantity,price}]`)。
 
-## 待驗證清單(接手的人請優先確認,對不上就發 issue)
+## 已交叉驗證(以自有帳號做唯讀查詢確認,未開立任何發票)
+
+- ✅ 認證與電子發票**共用同一顆 JWT**:以 `api.simpany.co` 取得的 token 打
+  `member2.simpany.co` 會進到應用層(而非被擋在 401)。
+- ✅ base URL 與 `/c/{companyId}/receipts…` 路由結構正確(路由有 match)。
+- ✅ 錯誤 envelope 為框架式 `{ message }`(必要時帶 `{ errors }`);未開通電子發票的公司
+  對這些端點會回 **404**(adapter 會正規化成 `NOT_FOUND`)。
+
+## 待驗證清單(需「已開通電子發票」的帳號;接手的人請優先確認,對不上就發 issue)
 
 1. 開立 payload 的欄位名與必填(尤其 `customer`、`carrier`、`zeroTaxRateReasonCode`)。
 2. 開立/折讓**回應**的欄位名(`invoiceNumber`、`randomNumber`、`issuedAt`、`allowanceNumber`、`id`)。
 3. 以發票號碼反查 receiptId 的列表查詢參數(目前假設 `keyword=`)。
-4. member2 的成功 / 錯誤 envelope(目前:成功 `{data}`、錯誤 `{status:"error",error:{title}}` 或 422 `{errors}`)。
+4. **成功** envelope(目前假設 `{data}`)與開立的**業務錯誤**格式(假設 `{status:"error",error:{title}}`)。
 5. 折讓確認流程(建立後為 DRAFT,是否需要額外「確認」步驟才生效)。
 
 ## 測試

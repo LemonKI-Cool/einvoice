@@ -75,12 +75,20 @@ recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
 `shouldAdjustTaxAmount` (B2B ±1 rounding), `items` (raw allowance lines
 `[{id,quantity,price}]`).
 
-## Verification checklist (confirm these first; open an issue on mismatch)
+## Cross-checked (read-only, with our own account — no invoice was issued)
+
+- ✅ Auth and e-invoice **share one JWT**: a token from `api.simpany.co` reaches the
+  application layer on `member2.simpany.co` (not blocked at 401).
+- ✅ The base URL and `/c/{companyId}/receipts…` route structure are correct (routes matched).
+- ✅ The error envelope is framework-style `{ message }` (with `{ errors }` when relevant);
+  a company not enrolled for e-invoice gets a **404** on these routes (normalized to `NOT_FOUND`).
+
+## Verification checklist — needs an e-invoice-enabled account (open an issue on mismatch)
 
 1. Issue payload field names / required fields (esp. `customer`, `carrier`, `zeroTaxRateReasonCode`).
 2. Issue/allowance RESPONSE field names (`invoiceNumber`, `randomNumber`, `issuedAt`, `allowanceNumber`, `id`).
 3. The list query param used to resolve a receiptId from an invoice number (assumed `keyword=`).
-4. member2 success/error envelopes (assumed success `{data}`, error `{status:"error",error:{title}}` / 422 `{errors}`).
+4. Success envelope (assumed `{data}`) and the issue business-error shape (assumed `{status:"error",error:{title}}`).
 5. Allowance confirmation flow (created as DRAFT — does it need a separate confirm step?).
 
 ## Tests
