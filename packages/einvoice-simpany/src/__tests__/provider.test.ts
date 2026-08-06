@@ -589,6 +589,86 @@ describe("subscription quota / frequent items", () => {
     expect(s.raw.remainingQuantity).toBe(123);
   });
 
+  it("canIssue reports ok when both the plan quota and the tracks cover the count", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/subscription-status`), () =>
+        rok({ status: "ACTIVE", remainingQuantity: 50 }),
+      ),
+      http.get(rurl(`/c/${CID}/track-numbers/enabled`), () =>
+        rok([
+          { beginNumber: "12345000", endNumber: "12345199", remainingQuantity: 199 },
+          { beginNumber: "67890000", endNumber: "67890099", remainingQuantity: 100 },
+        ]),
+      ),
+    );
+    const cap = await testProvider().canIssue(10);
+    expect(cap).toMatchObject({
+      ok: true,
+      count: 10,
+      bottleneck: undefined,
+      subscriptionRemaining: 50,
+      subscriptionStatus: "ACTIVE",
+      trackRemaining: 299,
+    });
+    expect(cap.tracks).toHaveLength(2);
+  });
+
+  it("canIssue names the plan quota as the bottleneck when it is the tighter limit", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/subscription-status`), () =>
+        rok({ status: "ACTIVE", remainingQuantity: 3 }),
+      ),
+      http.get(rurl(`/c/${CID}/track-numbers/enabled`), () =>
+        rok([{ beginNumber: "12345000", endNumber: "12345199", remainingQuantity: 199 }]),
+      ),
+    );
+    expect(await testProvider().canIssue(10)).toMatchObject({
+      ok: false,
+      bottleneck: "SUBSCRIPTION",
+      subscriptionRemaining: 3,
+      trackRemaining: 199,
+    });
+  });
+
+  it("canIssue names the tracks as the bottleneck when the numbers run out first", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/subscription-status`), () =>
+        rok({ status: "ACTIVE", remainingQuantity: 500 }),
+      ),
+      http.get(rurl(`/c/${CID}/track-numbers/enabled`), () =>
+        rok([{ beginNumber: "12345000", endNumber: "12345199", remainingQuantity: 4 }]),
+      ),
+    );
+    expect(await testProvider().canIssue(10)).toMatchObject({
+      ok: false,
+      bottleneck: "TRACK_NUMBER",
+      trackRemaining: 4,
+    });
+  });
+
+  it("canIssue defaults to a single invoice and treats no enabled track as zero", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/subscription-status`), () =>
+        rok({ status: "ACTIVE", remainingQuantity: 10 }),
+      ),
+      http.get(rurl(`/c/${CID}/track-numbers/enabled`), () => rok([])),
+    );
+    expect(await testProvider().canIssue()).toMatchObject({
+      ok: false,
+      count: 1,
+      bottleneck: "TRACK_NUMBER",
+      trackRemaining: 0,
+    });
+  });
+
   it("listFrequentItems returns the raw rows", async () => {
     server.use(
       login(),

@@ -56,6 +56,24 @@ export interface SimpanyTrackNumber extends TrackNumberUsage {
   raw: Record<string, unknown>;
 }
 
+/** Result of {@link SimpanyProvider.canIssue} — the two limits and which one binds. */
+export interface SimpanyIssueCapacity {
+  /** Whether `count` more invoices can be issued right now (both limits hold). */
+  ok: boolean;
+  /** The count that was checked. */
+  count: number;
+  /** Which limit is short, when `ok` is false. */
+  bottleneck?: "SUBSCRIPTION" | "TRACK_NUMBER";
+  /** Issues left on the Simpany plan. */
+  subscriptionRemaining: number;
+  /** The plan's raw status string (e.g. `"ACTIVE"`); not interpreted here. */
+  subscriptionStatus: string;
+  /** Unused invoice numbers across the enabled 字軌 — an upper bound, see `canIssue`. */
+  trackRemaining: number;
+  /** The enabled 字軌 behind `trackRemaining`. */
+  tracks: SimpanyTrackNumber[];
+}
+
 /** Unwrap a list response to an array — bare `[...]`, `{ data:[...] }`, or `{ list:[...] }`. */
 function toArray(res: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(res)) return res as Array<Record<string, unknown>>;
@@ -505,6 +523,44 @@ export class SimpanyProvider implements InvoiceProvider {
       status: String(r.status ?? ""),
       remainingQuantity: Number(r.remainingQuantity ?? 0),
       raw: r,
+    };
+  }
+
+  /**
+   * 開立前額度預檢 — can this company issue `count` more invoices right now?
+   * Read-only; combines the two independent limits that both have to hold, and
+   * names whichever one is short:
+   *
+   * - the **plan quota** ({@link getSubscriptionStatus}) — issues you have paid for;
+   * - the **invoice numbers** left across the ENABLED 字軌 ({@link listTrackNumbers}).
+   *
+   * On a subscription plan the quota is often far smaller than the allocated
+   * number ranges, so checking only the 字軌 reads as optimistic.
+   *
+   * `tracks` carries the per-track breakdown. Note it counts every enabled
+   * track: whether Simpany also enables tracks for a future 期別 (which would
+   * not be usable today) is unconfirmed, so treat `trackRemaining` as an upper
+   * bound and inspect `tracks[].year` / `.month` when that matters.
+   */
+  async canIssue(count = 1): Promise<SimpanyIssueCapacity> {
+    const quota = await this.getSubscriptionStatus();
+    const tracks = await this.listTrackNumbers({ enabledOnly: true });
+    const trackRemaining = tracks.reduce((sum, t) => sum + t.remaining, 0);
+    const short = quota.remainingQuantity < count || trackRemaining < count;
+    return {
+      ok: !short,
+      count,
+      // On a tie both are equally binding; report the plan quota, the one the
+      // caller can actually act on without waiting for a number allocation.
+      bottleneck: !short
+        ? undefined
+        : quota.remainingQuantity <= trackRemaining
+          ? "SUBSCRIPTION"
+          : "TRACK_NUMBER",
+      subscriptionRemaining: quota.remainingQuantity,
+      subscriptionStatus: quota.status,
+      trackRemaining,
+      tracks,
     };
   }
 

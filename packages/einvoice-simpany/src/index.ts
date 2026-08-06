@@ -5,7 +5,7 @@
 // UNVERIFIED against a live e-invoice-enabled account — they may be inaccurate;
 // see provider.ts / endpoints.ts. Report discrepancies as GitHub issues.
 export { createSimpanyProvider, SimpanyProvider } from "./provider.js";
-export type { SimpanyTrackNumber } from "./provider.js";
+export type { SimpanyIssueCapacity, SimpanyTrackNumber } from "./provider.js";
 export type { SimpanyConfig } from "./config.js";
 export { SIMPANY_BASE_URL, SIMPANY_RECEIPT_BASE_URL } from "./config.js";
 export {
