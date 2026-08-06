@@ -11,6 +11,7 @@ import {
   parseInput,
   parseTaipeiDate,
   queryInvoiceInputSchema,
+  taipeiDateTime,
   voidAllowanceInputSchema,
   voidInvoiceInputSchema,
   type AllowanceInput,
@@ -39,9 +40,15 @@ import {
   type TrackNumberUsage,
 } from "./mapping.js";
 
-/** One 字軌 row plus its computed usage (fields raw from Simpany, UNVERIFIED). */
+/** One 字軌 row plus its usage counts (field names VERIFIED live — see PR #5). */
 export interface SimpanyTrackNumber extends TrackNumberUsage {
-  period?: unknown;
+  /** ROC (民國) year of the period, e.g. 115. */
+  year?: number;
+  /** Period month (1–12). */
+  month?: number;
+  /** The 字軌 letters, e.g. "AB". */
+  track?: string;
+  /** Range bounds / cursor — digit strings on the wire (e.g. "12345000"). */
   beginNumber?: unknown;
   endNumber?: unknown;
   lastUsedNumber?: unknown;
@@ -59,6 +66,9 @@ function toArray(res: unknown): Array<Record<string, unknown>> {
 
 const fail = (message: string, code = InvoiceErrorCode.VALIDATION) =>
   new InvoiceError(message, { provider: "simpany", code, rawMessage: message });
+
+/** The current year in Asia/Taipei as a ROC (民國) year — e.g. 2026 → 115. */
+const currentRocYear = () => Number(taipeiDateTime(new Date()).slice(0, 4)) - 1911;
 
 /** provider-specific fields callers may pass via `input.providerOptions`. */
 interface SimpanyProviderOptions {
@@ -364,19 +374,40 @@ export class SimpanyProvider implements InvoiceProvider {
   }
 
   /**
-   * 字軌列表 — list this company's invoice-number tracks with computed
-   * total / used / remaining counts. Read-only; the ideal smoke test that the
-   * integration is wired (auth + permission + routing) without issuing anything.
-   * `enabledOnly` uses the `/track-numbers/enabled` endpoint.
+   * 字軌列表 — list this company's invoice-number tracks with usage counts
+   * (`remaining` comes straight from the API's `remainingQuantity`). Read-only;
+   * the ideal smoke test that the integration is wired (auth + permission +
+   * routing) without issuing anything.
+   *
+   * The API REQUIRES `year`, in ROC (民國) years — e.g. 115 for 2026 (verified
+   * live: omitting it is a 422). It defaults to the current Taipei year. A
+   * Gregorian year is rejected here with VALIDATION because the API silently
+   * returns an empty list for one — which downstream reads as "tracks
+   * exhausted". `enabledOnly` uses `/track-numbers/enabled`, which takes no year.
    */
-  async listTrackNumbers(opts: { enabledOnly?: boolean } = {}): Promise<SimpanyTrackNumber[]> {
+  async listTrackNumbers(
+    opts: { enabledOnly?: boolean; year?: number } = {},
+  ): Promise<SimpanyTrackNumber[]> {
+    let query = "";
+    if (!opts.enabledOnly) {
+      const year = opts.year ?? currentRocYear();
+      if (year > 1911) {
+        throw fail(
+          `listTrackNumbers: year must be a ROC (民國) year, e.g. ${currentRocYear()} — got ` +
+            `${year}. The API silently returns an empty list for a Gregorian year.`,
+        );
+      }
+      query = `?year=${year}`;
+    }
     const cid = await this.resolveCompanyId();
     const path = opts.enabledOnly
       ? RECEIPT_ENDPOINTS.trackNumbersEnabled(cid)
-      : RECEIPT_ENDPOINTS.trackNumbers(cid);
+      : `${RECEIPT_ENDPOINTS.trackNumbers(cid)}${query}`;
     const res = await this.client.receipt<unknown>("GET", path);
     return toArray(res).map((row) => ({
-      period: row.period,
+      year: typeof row.year === "number" ? row.year : undefined,
+      month: typeof row.month === "number" ? row.month : undefined,
+      track: row.track != null ? String(row.track) : undefined,
       beginNumber: row.beginNumber,
       endNumber: row.endNumber,
       lastUsedNumber: row.lastUsedNumber,

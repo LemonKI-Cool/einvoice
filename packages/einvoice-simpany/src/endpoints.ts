@@ -73,9 +73,14 @@ export const RECEIPT_ENDPOINTS = {
   /** 零稅率原因清單. */
   zeroTaxReasons: (c: string | number) => `/c/${c}/receipts/zero-tax-rate-reasons`,
   // --- 字軌 (invoice number tracks) ---
-  /** 字軌列表（GET，全部）. 每筆含 period / beginNumber / endNumber / lastUsedNumber / quantity. */
+  /**
+   * 字軌列表（GET）. REQUIRES `?year=` in ROC (民國) years (e.g. 115) — omitting it
+   * is a 422, and a Gregorian year silently returns `[]` (verified live). Rows:
+   * `{ id, year, month, type, track, beginNumber, endNumber, lastUsedNumber,
+   * remainingQuantity, status, canEnable, canDisable, canDelete, canSplit }`.
+   */
   trackNumbers: (c: string | number) => `/c/${c}/track-numbers`,
-  /** 啟用中的字軌（GET）. */
+  /** 啟用中的字軌（GET）. Takes no `year` param (verified live). */
   trackNumbersEnabled: (c: string | number) => `/c/${c}/track-numbers/enabled`,
   /** 單一字軌（PATCH 更新 / DELETE 刪除）. */
   trackNumber: (c: string | number, id: string | number) => `/c/${c}/track-numbers/${id}`,

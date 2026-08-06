@@ -1,6 +1,13 @@
 import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { Capability, CarrierType, PriceMode, TaxType, supports } from "@paid-tw/einvoice";
+import {
+  Capability,
+  CarrierType,
+  PriceMode,
+  TaxType,
+  supports,
+  taipeiDateTime,
+} from "@paid-tw/einvoice";
 import { okLogin, okMe, rerror, rok, rpdf, rurl, server, testProvider, url } from "./server.js";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -415,40 +422,80 @@ describe("read-only helpers", () => {
     expect(seenUrl).toContain("limit=5");
   });
 
-  it("listTrackNumbers returns rows with computed total/used/remaining", async () => {
+  it("listTrackNumbers sends the ROC year and maps a real (masked) track row", async () => {
+    let seen: URL | undefined;
     server.use(
       login(),
       me(),
-      http.get(rurl(`/c/${CID}/track-numbers`), () =>
-        rok([
+      http.get(rurl(`/c/${CID}/track-numbers`), ({ request }) => {
+        seen = new URL(request.url);
+        return rok([
           {
-            id: 7,
-            period: "11312",
-            beginNumber: 0,
-            endNumber: 49,
-            lastUsedNumber: 9,
-            quantity: 50,
+            id: 99999,
+            year: 115,
+            month: 8,
+            type: "NORMAL",
+            track: "AB",
+            beginNumber: "12345000",
+            endNumber: "12345199",
+            lastUsedNumber: "12345000",
+            remainingQuantity: 199,
+            status: "ENABLED",
+            canEnable: false,
+            canDisable: true,
+            canDelete: false,
+            canSplit: false,
           },
-        ]),
-      ),
+        ]);
+      }),
     );
-    const tracks = await testProvider().listTrackNumbers();
-    expect(tracks[0]).toMatchObject({ total: 50, used: 10, remaining: 40, period: "11312" });
-    expect(tracks[0]?.raw.id).toBe(7);
+    const tracks = await testProvider().listTrackNumbers({ year: 115 });
+    expect(seen?.searchParams.get("year")).toBe("115");
+    expect(tracks[0]).toMatchObject({
+      year: 115,
+      month: 8,
+      track: "AB",
+      total: 200,
+      used: 1,
+      remaining: 199,
+    });
+    expect(tracks[0]?.raw.id).toBe(99999);
   });
 
-  it("listTrackNumbers({ enabledOnly }) hits the enabled endpoint", async () => {
-    let hit = false;
+  it("listTrackNumbers defaults year to the current ROC year", async () => {
+    let seen: URL | undefined;
     server.use(
       login(),
       me(),
-      http.get(rurl(`/c/${CID}/track-numbers/enabled`), () => {
-        hit = true;
+      http.get(rurl(`/c/${CID}/track-numbers`), ({ request }) => {
+        seen = new URL(request.url);
+        return rok([]);
+      }),
+    );
+    await testProvider().listTrackNumbers();
+    const roc = Number(taipeiDateTime(new Date()).slice(0, 4)) - 1911;
+    expect(seen?.searchParams.get("year")).toBe(String(roc));
+  });
+
+  it("listTrackNumbers rejects a Gregorian year (the API silently returns [] for one)", async () => {
+    await expect(testProvider().listTrackNumbers({ year: 2026 })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+  });
+
+  it("listTrackNumbers({ enabledOnly }) hits the enabled endpoint without a year", async () => {
+    let seen: URL | undefined;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/track-numbers/enabled`), ({ request }) => {
+        seen = new URL(request.url);
         return rok([]);
       }),
     );
     await testProvider().listTrackNumbers({ enabledOnly: true });
-    expect(hit).toBe(true);
+    expect(seen).toBeDefined();
+    expect(seen?.searchParams.has("year")).toBe(false);
   });
 });
 
