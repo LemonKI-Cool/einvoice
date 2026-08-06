@@ -1,6 +1,6 @@
 {
   "name": "@paid-tw/einvoice-simpany",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Simpany (simpany.co) e-invoice adapter for @paid-tw/einvoice. Auth verified; the e-invoice operations are hand-compiled and UNVERIFIED — see README before use.",
   "license": "MIT",
   "repository": {

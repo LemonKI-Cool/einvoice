@@ -1,5 +1,13 @@
 # @paid-tw/einvoice-simpany
 
+## 0.1.1
+
+### Patch Changes
+
+- No functional changes. First release published through the repo's OIDC
+  trusted-publishing pipeline (0.1.0 was published manually with an OTP before
+  the trusted publisher was configured).
+
 ## 0.1.0
 
 ### Minor Changes
