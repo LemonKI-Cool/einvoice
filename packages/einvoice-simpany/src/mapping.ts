@@ -26,6 +26,19 @@ export const SIMPANY_CARRIER_TYPE = {
   MEMBERSHIP: "MEMBERSHIP",
 } as const;
 
+/**
+ * A 字軌 row's `status` — a different enum from a receipt's {@link SIMPANY_STATUS}.
+ * Both values are VERIFIED live (PR #5).
+ *
+ * ⚠️ An `EXPIRED` track KEEPS its `remainingQuantity`: a period's unused numbers
+ * simply lapse, so a track can report 200 remaining and be worth nothing. Any
+ * capacity arithmetic must count `ENABLED` tracks only.
+ */
+export const SIMPANY_TRACK_STATUS = {
+  ENABLED: "ENABLED",
+  EXPIRED: "EXPIRED",
+} as const;
+
 export const SIMPANY_STATUS = {
   DRAFT: "DRAFT",
   ISSUED: "ISSUED",

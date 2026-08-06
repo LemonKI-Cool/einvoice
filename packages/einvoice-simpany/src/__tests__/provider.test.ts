@@ -545,6 +545,7 @@ describe("read-only helpers", () => {
       year: 115,
       month: 8,
       track: "AB",
+      status: "ENABLED",
       total: 200,
       used: 1,
       remaining: 199,
@@ -654,6 +655,36 @@ describe("subscription quota / frequent items", () => {
       trackRemaining: 299,
     });
     expect(cap.tracks).toHaveLength(2);
+  });
+
+  it("canIssue ignores an EXPIRED track even though it still reports numbers left", async () => {
+    let seen: URL | undefined;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/subscription-status`), () =>
+        rok({ status: "ACTIVE", remainingQuantity: 500 }),
+      ),
+      // The enabled endpoint is what filters out lapsed periods; a lapsed track
+      // keeps its remainingQuantity, so counting all tracks would overstate.
+      http.get(rurl(`/c/${CID}/track-numbers/enabled`), ({ request }) => {
+        seen = new URL(request.url);
+        return rok([
+          {
+            year: 115,
+            month: 8,
+            beginNumber: "12345000",
+            endNumber: "12345199",
+            remainingQuantity: 199,
+            status: "ENABLED",
+          },
+        ]);
+      }),
+    );
+    const cap = await testProvider().canIssue(10);
+    expect(seen?.pathname).toContain("/track-numbers/enabled");
+    expect(cap).toMatchObject({ ok: true, trackRemaining: 199 });
+    expect(cap.tracks[0]?.status).toBe("ENABLED");
   });
 
   it("canIssue names the plan quota as the bottleneck when it is the tighter limit", async () => {

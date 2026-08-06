@@ -43,3 +43,4 @@ export {
   SIMPANY_STATUS,
 } from "./mapping.js";
 export type { TrackNumberUsage } from "./mapping.js";
+export { SIMPANY_TRACK_STATUS } from "./mapping.js";

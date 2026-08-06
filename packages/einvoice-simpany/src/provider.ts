@@ -56,6 +56,8 @@ export interface SimpanyTrackNumber extends TrackNumberUsage {
   month?: number;
   /** The 字軌 letters, e.g. "AB". */
   track?: string;
+  /** `ENABLED` | `EXPIRED` — see {@link SIMPANY_TRACK_STATUS}. An EXPIRED track's numbers have lapsed. */
+  status?: string;
   /** Range bounds / cursor — digit strings on the wire (e.g. "12345000"). */
   beginNumber?: unknown;
   endNumber?: unknown;
@@ -472,6 +474,7 @@ export class SimpanyProvider implements InvoiceProvider {
       year: typeof row.year === "number" ? row.year : undefined,
       month: typeof row.month === "number" ? row.month : undefined,
       track: row.track != null ? String(row.track) : undefined,
+      status: row.status != null ? String(row.status) : undefined,
       beginNumber: row.beginNumber,
       endNumber: row.endNumber,
       lastUsedNumber: row.lastUsedNumber,
@@ -542,10 +545,15 @@ export class SimpanyProvider implements InvoiceProvider {
    * On a subscription plan the quota is often far smaller than the allocated
    * number ranges, so checking only the 字軌 reads as optimistic.
    *
-   * `tracks` carries the per-track breakdown. Note it counts every enabled
-   * track: whether Simpany also enables tracks for a future 期別 (which would
-   * not be usable today) is unconfirmed, so treat `trackRemaining` as an upper
-   * bound and inspect `tracks[].year` / `.month` when that matters.
+   * Counts ENABLED tracks only, which is not merely a tidiness choice: an
+   * EXPIRED track keeps its `remainingQuantity` (a lapsed period was observed
+   * still reporting all 200 numbers unused), so including them would overstate
+   * capacity by whole periods.
+   *
+   * `tracks` carries the per-track breakdown. `trackRemaining` is still an upper
+   * bound: a live account showed only the current period enabled, but that is
+   * one account at one moment and does not rule out a future 期別 being enabled
+   * early — inspect `tracks[].year` / `.month` when that matters.
    */
   async canIssue(count = 1): Promise<SimpanyIssueCapacity> {
     const quota = await this.getSubscriptionStatus();
