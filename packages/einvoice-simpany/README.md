@@ -2,10 +2,12 @@
 
 Simpany（[simpany.co](https://simpany.co/e-invoice)）的 [@paid-tw/einvoice](../einvoice) 供應商轉接器。
 
-> ⚠️ **五個操作的細節由我們人工梳理整理,可能有誤,尚未對過真實 API。**
-> 登入 / `me` / 公司解析這層已對過正式 API（VERIFIED）；但開立、作廢、折讓、折讓作廢、
-> 查詢的端點、payload、欄位名稱是人工整理出來的,**還沒用「已開通電子發票的帳號」實際
-> 驗證過**。請當成 best-effort 起點使用,遇到不符就發 GitHub issue。本套件標記
+> ⚠️ **「寫入」操作(開立、作廢、折讓、折讓作廢)送出的 payload 由我們人工梳理整理,
+> 可能有誤,尚未實際執行過。** 登入 / `me` / 公司解析已對過正式 API(VERIFIED);
+> **讀取路徑**(明細 / 列表 / 字軌 / 訂閱額度的路由、必填參數、回應欄位與 enum 值)
+> 也已由社群以「已開通電子發票」的正式帳號唯讀驗證(2026-08,見
+> [PR #5](https://github.com/paid-tw/einvoice/pull/5),感謝 @reidevbx)。
+> 請把寫入操作當成 best-effort 起點使用,遇到不符就發 GitHub issue。本套件標記
 > `private: true`,驗證通過前不會發佈到 npm。
 >
 > 使用前**請務必詳閱下方[免責聲明](#免責聲明)**,並自行確認符合相關法規與 Simpany 服務條款。
@@ -19,7 +21,8 @@ Simpany（[simpany.co](https://simpany.co/e-invoice)）的 [@paid-tw/einvoice](.
 - Simpany 沒有公開的開發者 API;以下形狀為人工整理(可能有誤)。
 - **雙 host、同一顆 JWT**:
   - 認證 / 帳號:`https://api.simpany.co/v1`(`POST /login`、`GET /me`)— ✅ 已驗證
-  - 電子發票(內部稱 **receipt**):`https://member2.simpany.co/api/v1/c/{companyId}/…` — ⚠️ 待驗證
+  - 電子發票(內部稱 **receipt**):`https://member2.simpany.co/api/v1/c/{companyId}/…`
+    — ✅ 讀取路徑已驗證;⚠️ 寫入 payload 待驗證
 - **一次操作的資料流**(以開立為例):
   1. 惰性登入取得 JWT(或使用注入的 `token`)
   2. 解析 `companyId`(由 config 指定,或 `GET /me` 取得)
@@ -90,7 +93,7 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 }
 ```
 
-## 操作與端點（人工整理,UNVERIFIED）
+## 操作與端點（路由已驗證;寫入 payload 仍屬人工整理、UNVERIFIED）
 
 | 統一操作 | HTTP | 端點（receipt base 之下） |
 |---|---|---|
@@ -101,8 +104,10 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 | 查詢 `query` | GET | `/c/{cid}/receipts/{receiptId}` |
 
 - **內部 id vs 發票號碼**:作廢 / 查詢 / 折讓是用 Simpany 的**內部 receipt id**,不是發票號碼。
-  請把 `issue` 結果的 `raw.id` 透過 `providerOptions.receiptId` 傳回來(最可靠);只給發票號碼
-  時會嘗試用列表的 `keyword` 查詢反查——但那個查詢參數尚未驗證。
+  請把 `issue` 結果的 `raw.id`(或 `listReceipts()` 列出的 row id)透過
+  `providerOptions.receiptId` 傳入——**必填**,缺了會直接丟 `VALIDATION`(不發任何請求)。
+  原本「以發票號碼反查」的 fallback 已移除:列表端點必填 `status` / `startDate` / `endDate`
+  (缺了必回 422,已實測),反查請求根本到不了資料,且 `keyword` 過濾未經驗證。
 - **折讓作廢**必須帶 `providerOptions.allowanceId`(內部 id);若折讓還在「待確認(DRAFT)」
   狀態,加 `providerOptions.draft: true` 走 draft 端點。
 - **能力**:宣告 ISSUE / VOID / ALLOWANCE / VOID_ALLOWANCE / QUERY / B2B。**不支援**
@@ -115,12 +120,12 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 
 | 方法 | 端點 | 說明 | 異動? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | 發票列表(對帳 / 確認可讀) | 唯讀 |
-| `listTrackNumbers({enabledOnly?})` | GET `/track-numbers` | **字軌**:每段的總量 / 已開立 / 剩餘(見下) | 唯讀 |
+| `listReceipts(query?)` | GET `/receipts` | 發票列表;API 必填的 `status`+`startDate`+`endDate` 預設為 `ALL`+當年(台北時區),可覆寫 | 唯讀 |
+| `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=民國年` | **字軌**:每段的總量 / 已開立 / 剩餘(見下;`year` 為**民國年**,預設當年) | 唯讀 |
 | `getSubscriptionStatus()` | GET `/subscription-status` | **訂閱額度**:`{ status, remainingQuantity }`(見下) | 唯讀 |
 | `listFrequentItems()` | GET `/frequent-items` | **常用品項**清單(可重複使用的品名/單價預設) | 唯讀 |
-| `notifyReceipt(no, emails, {receiptId?})` | POST `/receipts/{id}/notifications` | 補寄 / 寄送通知信到指定 email | 寄送 email |
-| `printReceipt(no, {receiptId?, format?, reprint?})` | POST `/receipts/{id}/print` | 下載證明聯 PDF(回傳 bytes) | 唯讀 |
+| `notifyReceipt(receiptId, emails)` | POST `/receipts/{id}/notifications` | 補寄 / 寄送通知信到指定 email | 寄送 email |
+| `printReceipt(receiptId, {format?, reprint?})` | POST `/receipts/{id}/print` | 下載證明聯 PDF(回傳 bytes) | 唯讀 |
 
 ### 訂閱額度(subscription quota)
 
@@ -198,13 +203,13 @@ const inv = await provider.issue({
   priceMode: "TAX_EXCLUSIVE",
 });
 
-// 後續操作把 raw.id 傳回來當 receiptId
+// 後續操作把 raw.id 傳回來當 receiptId(必填——Simpany 以內部 id 為鍵,無法用發票號碼反查)
 const receiptId = (inv.raw as { id: number }).id;
 await provider.query({ invoiceNumber: inv.invoiceNumber, providerOptions: { receiptId } });
 await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "開錯", providerOptions: { receiptId } });
 ```
 
-`providerOptions` 可帶的欄位:`receiptId`、`allowanceId`、`draft`、`emails`(通知信收件人)、
+`providerOptions` 可帶的欄位:`receiptId`(**作廢/查詢/折讓必填**)、`allowanceId`、`draft`、`emails`(通知信收件人)、
 `zeroTaxRateReasonCode` / `customsClearanceType`(零稅率用)、`shouldAdjustTaxAmount`(B2B ±1 稅額調整)、
 `items`(直接指定折讓品項 `[{id,quantity,price}]`)。
 
@@ -245,6 +250,27 @@ await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "開錯", provid
 - ✅ 錯誤 envelope 為框架式 `{ message }`(必要時帶 `{ errors }`);未開通電子發票的公司
   對這些端點會回 **404**(adapter 會正規化成 `NOT_FOUND`)。
 
+### 由社群以「已開通電子發票」的正式帳號唯讀驗證(2026-08,見 [PR #5](https://github.com/paid-tw/einvoice/pull/5),感謝 @reidevbx)
+
+- ✅ **明細** `GET /c/{cid}/receipts/{id}` 的回應欄位與 enum 值與 adapter 假設一致
+  (`taxType: "TAXABLE"`、`carrierType: "NO_CARRIER"`、`status: "ISSUED"` 等)。重點:
+  - `issuedAt` 為 ISO8601 帶時區(`YYYY-MM-DDTHH:MM:SS+08:00`);
+  - 金額欄位為 `untaxedAmount` / `taxAmount` / `totalAmount`(另有折讓後的 `remainingAmount`);
+  - B2B 的 `randomNumber` 為 `null`(B2C 是否有值待確認);
+  - `items[]` 為 `{ id, name, quantity, price, amount, amountWithTax }`,`id` 是**字串**
+    (折讓要用的 line id);
+  - 另有 `canInvalidate` / `canIssueAllowance` / `canPrint`(這張還能不能作廢/折讓/列印;
+    跨期舊發票實測 `canInvalidate: false`)與 `uploadStatus`(上傳財政部狀態)——
+    都在 `query()` 回傳的 `raw` 裡。
+- ✅ **列表** `GET /receipts`:`status` + `startDate` + `endDate` **三者必填**(缺一即 422);
+  `status=ALL` 與 `page` / `limit` 可用;`yearMonth` **不被接受**。**折讓列表**同樣必填 `status`。
+- ✅ **字軌** `GET /track-numbers`:必填 `year` 且為**民國年**(如 115);傳西元年**不會報錯、
+  只回空陣列**;`/track-numbers/enabled` 不需 `year`。實際欄位:`{ id, year, month, type,
+  track, beginNumber, endNumber, lastUsedNumber, remainingQuantity, status, can* }`
+  (`remainingQuantity` 為 API 直接給的權威剩餘量)。
+- ✅ `GET /subscription-status` → `{ status, remainingQuantity }`,與 `getSubscriptionStatus()` 吻合;
+  `GET /receipts/zero-tax-rate-reasons` → 9 筆 `{ code, name }`;`GET /frequent-items` 可用。
+
 ## 取得「已開通電子發票」的帳號
 
 發票端點需要公司已在 Simpany **開通電子發票(加值中心)服務**。未開通時:
@@ -267,10 +293,17 @@ const provider = createSimpanyProvider({ account, password });
 const me = await provider.me();
 console.log(me.companies.map((c) => ({ id: c.id, permissions: c.permissions })));
 
-// 2) 字軌:總量 / 已開立 / 剩餘
+// 2) 字軌:總量 / 已開立 / 剩餘(year 為民國年,預設當年——傳西元年會直接丟 VALIDATION)
 const tracks = await provider.listTrackNumbers();
 console.table(
-  tracks.map((t) => ({ period: t.period, total: t.total, used: t.used, remaining: t.remaining })),
+  tracks.map((t) => ({
+    year: t.year, // 民國年,如 115
+    month: t.month,
+    track: t.track, // 字軌,如 "AB"
+    total: t.total,
+    used: t.used,
+    remaining: t.remaining, // 直接採用 API 的 remainingQuantity
+  })),
 );
 
 // 3) 已開立發票列表(確認可讀取)
@@ -291,23 +324,23 @@ const items = await provider.listFrequentItems();
 - `me()` / `listTrackNumbers()` / `listReceipts()` 是本 adapter 的**擴充方法**(超出 `InvoiceProvider`
   介面),專供讀取 / 驗證,不會異動任何資料。
 - 若帳號**尚未開通電子發票**,這些呼叫會回 404(→ `NOT_FOUND`)——那是權限 / 開通問題,不是串接錯誤。
-- `listTrackNumbers()` 的 `total` / `used` / `remaining` 由 `beginNumber` / `endNumber` /
-  `lastUsedNumber` / `quantity` 計算(欄位屬人工整理);每筆也帶原始 `raw`。**若數字對不上,請發 issue
-  並附上 `raw`。**
+- `listTrackNumbers({ year })` 的 `year` 是**民國年**(如 115),預設為當年(台北時區);
+  傳西元年會直接丟 `VALIDATION`——因為 API 收到西元年**不會報錯、只會回空陣列**(已實測),
+  安靜的空結果會被誤判成「字軌用完」。
+- `remaining` 直接採用 API 回傳的 `remainingQuantity`(權威值);`total` 由號段推算
+  (`endNumber − beginNumber + 1`),`used = total − remaining`;每筆也帶原始 `raw`。
+  **若數字對不上,請發 issue 並附上 `raw`。**
 
 ## 補寄通知信 / 下載發票 PDF
 
 消費者結帳時 email 填錯、沒收到發票時,可**補寄到更正後的信箱**,或**下載證明聯 PDF** 自行寄送 / 列印:
 
 ```ts
-// 補寄(可寄到更正後的 email;支援多組)
-await provider.notifyReceipt("AB12345678", ["fixed@example.com"], { receiptId });
+// 補寄(可寄到更正後的 email;支援多組)——以內部 receiptId(issue 結果的 raw.id)為鍵
+await provider.notifyReceipt(receiptId, ["fixed@example.com"]);
 
 // 下載發票證明聯 PDF(回傳 bytes)
-const { contentType, data } = await provider.printReceipt("AB12345678", {
-  receiptId,
-  format: "FORMAT_A4",
-});
+const { contentType, data } = await provider.printReceipt(receiptId, { format: "FORMAT_A4" });
 ```
 
 - 兩者同為 adapter **擴充方法**(不在 `InvoiceProvider` 介面內;比照 ezreceipt 的 `notifyInvoice` / `printInvoice`)。
@@ -318,11 +351,18 @@ const { contentType, data } = await provider.printReceipt("AB12345678", {
 
 ## 待驗證清單(需「已開通電子發票」的帳號;接手的人請優先確認,對不上就發 issue)
 
-1. 開立 payload 的欄位名與必填(尤其 `customer`、`carrier`、`zeroTaxRateReasonCode`)。
-2. 開立/折讓**回應**的欄位名(`invoiceNumber`、`randomNumber`、`issuedAt`、`allowanceNumber`、`id`)。
-3. 以發票號碼反查 receiptId 的列表查詢參數(目前假設 `keyword=`)。
-4. **成功** envelope(目前假設 `{data}`)與開立的**業務錯誤**格式(假設 `{status:"error",error:{title}}`)。
-5. 折讓確認流程(建立後為 DRAFT,是否需要額外「確認」步驟才生效)。
+1. **開立 payload** 的欄位名與必填(尤其 `customer`、`carrier`、`zeroTaxRateReasonCode`)。
+   ⚠️ 從明細回應的形狀看,有四處**可能**對不上(回應是扁平的 `buyerVat` / `buyerName`…而非巢狀
+   `customer`;`items[].amount` vs 送出的 `subTotal`;`items[].id` vs 送出的 `uuid`;非零稅率的
+   `customsClearanceType` 回 `"BLANK"` 而我們送 `null`)——但 request 與 response 形狀本來就可能
+   不同,**不足以下結論**;待有人從網頁前端錄到實際的 `POST /receipts/b2b` request 再確認。
+2. **開立 / 折讓當下的回應**欄位(明細查詢的回應已驗證,見上;開立回應與 `allowanceNumber` 待確認)。
+3. **成功** envelope(目前假設 `{data}`)與開立的**業務錯誤**格式(假設 `{status:"error",error:{title}}`)。
+4. 折讓確認流程(建立後為 DRAFT,是否需要額外「確認」步驟才生效)。
+5. B2C 的 `randomNumber` 是否有值(B2B 實測為 `null`)。
+
+> 原清單第 3 項「以發票號碼反查 receiptId 的查詢參數」已不適用——反查已移除,
+> `providerOptions.receiptId` 改為必填(見 PR #5 的討論)。
 
 ## 測試
 

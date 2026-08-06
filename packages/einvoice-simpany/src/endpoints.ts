@@ -6,10 +6,11 @@
  *   - RECEIPT base `https://member2.simpany.co/api/v1` — the e-invoice ("receipt")
  *     operations, all scoped `/c/{companyId}/...`
  *
- * The RECEIPT endpoints and payloads below were compiled by hand and are NOT
- * from a published API, NOT yet confirmed against a live e-invoice-enabled
- * account, and may be inaccurate. Treat them as a best-effort starting point;
- * please file discrepancies as GitHub issues.
+ * The RECEIPT endpoints below were compiled by hand (no published API). The READ
+ * path — routes, required query params, and response fields — was verified
+ * against a live e-invoice-enabled account (read-only; PR #5, 2026-08). The
+ * WRITE payloads (issue / void / allowance) remain UNVERIFIED and may be
+ * inaccurate — please file discrepancies as GitHub issues.
  *
  * `{id}` is Simpany's INTERNAL receipt/allowance id (the `id` field on a list/
  * detail row), NOT the 發票號碼 / 折讓單號.

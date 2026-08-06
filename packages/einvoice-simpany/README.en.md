@@ -3,13 +3,15 @@
 Simpany ([simpany.co](https://simpany.co/e-invoice)) adapter for
 [@paid-tw/einvoice](../einvoice).
 
-> ⚠️ **The five operations' details were compiled by hand, may be inaccurate, and
-> are UNVERIFIED against the live API.** The auth layer (login / `me` / company
-> resolution) is verified against production; but the issue / void / allowance /
-> void-allowance / query endpoints, payloads and field names were put together by
-> hand and have NOT been confirmed against a live e-invoice-enabled account. Treat
-> them as a best-effort starting point and file GitHub issues for any discrepancy.
-> The package is `private: true` and is not published until verified.
+> ⚠️ **The WRITE payloads (issue / void / allowance / void-allowance) were compiled
+> by hand, may be inaccurate, and have never been executed.** The auth layer
+> (login / `me` / company resolution) is verified against production, and the READ
+> path — detail / list / track-number / subscription routes, required query params,
+> response fields and enum values — has been verified read-only by the community
+> against a live e-invoice-enabled production account (2026-08, see
+> [PR #5](https://github.com/paid-tw/einvoice/pull/5) — thanks @reidevbx). Treat
+> the write operations as a best-effort starting point and file GitHub issues for
+> any discrepancy. The package is `private: true` and is not published until verified.
 >
 > Before using it, **please read the [Disclaimer](#disclaimer)** and confirm your
 > usage complies with applicable regulations and Simpany's terms of service.
@@ -26,7 +28,8 @@ Simpany ([simpany.co](https://simpany.co/e-invoice)) adapter for
   be inaccurate.
 - **Two hosts, one JWT:**
   - Auth/account: `https://api.simpany.co/v1` (`POST /login`, `GET /me`) — ✅ verified
-  - E-invoice (internally "receipt"): `https://member2.simpany.co/api/v1/c/{companyId}/…` — ⚠️ unverified
+  - E-invoice (internally "receipt"): `https://member2.simpany.co/api/v1/c/{companyId}/…`
+    — ✅ read path verified; ⚠️ write payloads unverified
 - **Request flow** (issue as the example):
   1. lazily log in for a JWT (or use an injected `token`)
   2. resolve `companyId` (from config, or `GET /me`)
@@ -99,7 +102,7 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 }
 ```
 
-## Operations & endpoints (hand-compiled, UNVERIFIED)
+## Operations & endpoints (routes verified; write payloads still hand-compiled, UNVERIFIED)
 
 | Unified op | HTTP | Endpoint (under the receipt base) |
 |---|---|---|
@@ -110,9 +113,12 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 | `query` | GET | `/c/{cid}/receipts/{receiptId}` |
 
 - **Internal id vs invoice number:** void / query / allowance key off Simpany's
-  INTERNAL receipt id, not the 發票號碼. Pass an `issue` result's `raw.id` back via
-  `providerOptions.receiptId` (most reliable); given only an invoice number, the
-  adapter attempts a list `keyword` lookup (that query param is unverified).
+  INTERNAL receipt id, not the 發票號碼. Pass an `issue` result's `raw.id` (or a
+  `listReceipts()` row id) via `providerOptions.receiptId` — **required**; without
+  it the call throws `VALIDATION` before any request. The old invoice-number
+  lookup was removed: the list endpoint requires `status` / `startDate` /
+  `endDate` (verified live — the lookup could only ever 422) and its `keyword`
+  filter is unverified.
 - **voidAllowance** requires `providerOptions.allowanceId` (internal id); add
   `providerOptions.draft: true` when the allowance is still a DRAFT (待確認).
 - **Capabilities:** ISSUE / VOID / ALLOWANCE / VOID_ALLOWANCE / QUERY / B2B.
@@ -127,12 +133,12 @@ nothing — handy for verifying the integration, reconciliation, and pre-issue c
 
 | Method | Endpoint | Purpose | Mutates? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | list issued invoices (reconciliation) | read-only |
-| `listTrackNumbers({enabledOnly?})` | GET `/track-numbers` | **track numbers**: total / used / remaining per range (below) | read-only |
+| `listReceipts(query?)` | GET `/receipts` | list issued invoices; the API-required `status`+`startDate`+`endDate` default to `ALL` + the current Taipei year, overridable | read-only |
+| `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=ROC` | **track numbers**: total / used / remaining per range (below; `year` is a **ROC (民國) year**, default current) | read-only |
 | `getSubscriptionStatus()` | GET `/subscription-status` | **plan quota**: `{ status, remainingQuantity }` (below) | read-only |
 | `listFrequentItems()` | GET `/frequent-items` | **frequent items** (reusable name/price presets) | read-only |
-| `notifyReceipt(no, emails, {receiptId?})` | POST `/receipts/{id}/notifications` | resend / send the notification to given emails | sends email |
-| `printReceipt(no, {receiptId?, format?, reprint?})` | POST `/receipts/{id}/print` | download the proof-copy PDF (bytes) | read-only |
+| `notifyReceipt(receiptId, emails)` | POST `/receipts/{id}/notifications` | resend / send the notification to given emails | sends email |
+| `printReceipt(receiptId, {format?, reprint?})` | POST `/receipts/{id}/print` | download the proof-copy PDF (bytes) | read-only |
 
 ### Subscription quota
 
@@ -216,12 +222,14 @@ const inv = await provider.issue({
   priceMode: "TAX_EXCLUSIVE",
 });
 
+// pass raw.id back as receiptId (REQUIRED — Simpany keys off its internal id;
+// there is no invoice-number reverse lookup)
 const receiptId = (inv.raw as { id: number }).id;
 await provider.query({ invoiceNumber: inv.invoiceNumber, providerOptions: { receiptId } });
 await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "wrong", providerOptions: { receiptId } });
 ```
 
-`providerOptions` fields: `receiptId`, `allowanceId`, `draft`, `emails` (notice
+`providerOptions` fields: `receiptId` (**required for void/query/allowance**), `allowanceId`, `draft`, `emails` (notice
 recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
 `shouldAdjustTaxAmount` (B2B ±1 rounding), `items` (raw allowance lines
 `[{id,quantity,price}]`).
@@ -263,6 +271,32 @@ recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
 - ✅ The error envelope is framework-style `{ message }` (with `{ errors }` when relevant);
   a company not enrolled for e-invoice gets a **404** on these routes (normalized to `NOT_FOUND`).
 
+### Community-verified read-only against a live e-invoice-enabled account (2026-08, [PR #5](https://github.com/paid-tw/einvoice/pull/5) — thanks @reidevbx)
+
+- ✅ **Detail** `GET /c/{cid}/receipts/{id}` response fields and enum values match the
+  adapter's assumptions (`taxType: "TAXABLE"`, `carrierType: "NO_CARRIER"`,
+  `status: "ISSUED"`, …). Highlights:
+  - `issuedAt` is ISO8601 with an offset (`YYYY-MM-DDTHH:MM:SS+08:00`);
+  - amounts are `untaxedAmount` / `taxAmount` / `totalAmount` (plus post-allowance
+    `remainingAmount`);
+  - `randomNumber` is `null` on B2B (whether B2C carries one is still open);
+  - `items[]` is `{ id, name, quantity, price, amount, amountWithTax }` — `id` is a
+    **string** (the line id allowances need);
+  - `canInvalidate` / `canIssueAllowance` / `canPrint` (whether the invoice can still
+    be voided / credited / printed — a cross-period invoice showed `canInvalidate:
+    false`) and `uploadStatus` (MOF upload state) are all in `query()`'s `raw`.
+- ✅ **List** `GET /receipts`: `status` + `startDate` + `endDate` are **all required**
+  (anything less is a 422); `status=ALL` and `page` / `limit` work; `yearMonth` is
+  **not accepted**. The **allowances list** requires `status` too.
+- ✅ **Tracks** `GET /track-numbers`: requires `year` as a **ROC (民國) year** (e.g. 115);
+  a Gregorian year is **not an error — it returns an empty list**;
+  `/track-numbers/enabled` takes no `year`. Actual fields: `{ id, year, month, type,
+  track, beginNumber, endNumber, lastUsedNumber, remainingQuantity, status, can* }`
+  (`remainingQuantity` is the API's own authoritative remaining count).
+- ✅ `GET /subscription-status` → `{ status, remainingQuantity }`, matching
+  `getSubscriptionStatus()`; `GET /receipts/zero-tax-rate-reasons` → 9 rows of
+  `{ code, name }`; `GET /frequent-items` works.
+
 ## Getting an e-invoice-enabled account
 
 The receipt endpoints require the company to have Simpany's **e-invoice
@@ -288,10 +322,18 @@ const provider = createSimpanyProvider({ account, password });
 const me = await provider.me();
 console.log(me.companies.map((c) => ({ id: c.id, permissions: c.permissions })));
 
-// 2) track numbers: total / used / remaining
+// 2) track numbers: total / used / remaining (year is a ROC year, default current —
+//    a Gregorian year throws VALIDATION)
 const tracks = await provider.listTrackNumbers();
 console.table(
-  tracks.map((t) => ({ period: t.period, total: t.total, used: t.used, remaining: t.remaining })),
+  tracks.map((t) => ({
+    year: t.year, // ROC year, e.g. 115
+    month: t.month,
+    track: t.track, // e.g. "AB"
+    total: t.total,
+    used: t.used,
+    remaining: t.remaining, // straight from the API's remainingQuantity
+  })),
 );
 
 // 3) list issued invoices (confirms read access)
@@ -314,9 +356,14 @@ const items = await provider.listFrequentItems();
   `InvoiceProvider` interface), for reading/verification only — they mutate nothing.
 - If the account **isn't enrolled** for e-invoice, these return 404 (→ `NOT_FOUND`) — a
   permission/enrollment issue, not a wiring bug.
-- `listTrackNumbers()`'s `total` / `used` / `remaining` are computed from `beginNumber` /
-  `endNumber` / `lastUsedNumber` / `quantity` (hand-compiled fields); each row also carries the
-  original `raw`. **If the numbers look wrong, open an issue with the `raw`.**
+- `listTrackNumbers({ year })`'s `year` is a **ROC (民國) year** (e.g. 115), defaulting to
+  the current Taipei year; a Gregorian year throws `VALIDATION` — the API responds to one
+  with **200 + an empty list, not an error** (verified live), and a silent empty result
+  would read as "tracks exhausted".
+- `remaining` comes straight from the API's `remainingQuantity` (authoritative); `total`
+  is derived from the range (`endNumber − beginNumber + 1`) and `used = total − remaining`;
+  each row also carries the original `raw`. **If the numbers look wrong, open an issue
+  with the `raw`.**
 
 ## Resend a notification / download the invoice PDF
 
@@ -324,14 +371,12 @@ When a consumer mistyped their email at checkout and didn't get the invoice, you
 **resend it to a corrected address**, or **download the proof PDF** to send/print yourself:
 
 ```ts
-// resend (to a corrected email; multiple allowed)
-await provider.notifyReceipt("AB12345678", ["fixed@example.com"], { receiptId });
+// resend (to a corrected email; multiple allowed) — keyed by the internal
+// receiptId (an issue result's raw.id)
+await provider.notifyReceipt(receiptId, ["fixed@example.com"]);
 
 // download the invoice proof PDF (returns bytes)
-const { contentType, data } = await provider.printReceipt("AB12345678", {
-  receiptId,
-  format: "FORMAT_A4",
-});
+const { contentType, data } = await provider.printReceipt(receiptId, { format: "FORMAT_A4" });
 ```
 
 - Both are adapter **extensions** (not in the `InvoiceProvider` interface; mirroring
@@ -346,11 +391,22 @@ const { contentType, data } = await provider.printReceipt("AB12345678", {
 
 ## Verification checklist — needs an e-invoice-enabled account (open an issue on mismatch)
 
-1. Issue payload field names / required fields (esp. `customer`, `carrier`, `zeroTaxRateReasonCode`).
-2. Issue/allowance RESPONSE field names (`invoiceNumber`, `randomNumber`, `issuedAt`, `allowanceNumber`, `id`).
-3. The list query param used to resolve a receiptId from an invoice number (assumed `keyword=`).
-4. Success envelope (assumed `{data}`) and the issue business-error shape (assumed `{status:"error",error:{title}}`).
-5. Allowance confirmation flow (created as DRAFT — does it need a separate confirm step?).
+1. **Issue payload** field names / required fields (esp. `customer`, `carrier`,
+   `zeroTaxRateReasonCode`). ⚠️ Judging by the detail-response shape, four spots **may**
+   not line up (the response is flat `buyerVat` / `buyerName`… vs our nested `customer`;
+   `items[].amount` vs our `subTotal`; `items[].id` vs our `uuid`; non-zero-rate
+   `customsClearanceType` reads `"BLANK"` while we send `null`) — but request and
+   response shapes legitimately differ, so this is **not conclusive**; to be settled by
+   recording an actual `POST /receipts/b2b` request from the web frontend.
+2. **Issue / allowance immediate RESPONSE** fields (the detail-query response is verified,
+   see above; the issue-time response and `allowanceNumber` remain open).
+3. Success envelope (assumed `{data}`) and the issue business-error shape (assumed `{status:"error",error:{title}}`).
+4. Allowance confirmation flow (created as DRAFT — does it need a separate confirm step?).
+5. Whether B2C invoices carry a `randomNumber` (B2B verified `null`).
+
+> The old item 3 ("the list query param for resolving a receiptId from an invoice
+> number") no longer applies — the lookup was removed and `providerOptions.receiptId`
+> is now required (see the PR #5 discussion).
 
 ## Tests
 
