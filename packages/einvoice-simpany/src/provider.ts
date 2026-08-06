@@ -67,8 +67,31 @@ function toArray(res: unknown): Array<Record<string, unknown>> {
 const fail = (message: string, code = InvoiceErrorCode.VALIDATION) =>
   new InvoiceError(message, { provider: "simpany", code, rawMessage: message });
 
+/** Today in Asia/Taipei as `YYYY-MM-DD`. */
+const taipeiToday = () => taipeiDateTime(new Date()).slice(0, 10);
+
 /** The current year in Asia/Taipei as a ROC (民國) year — e.g. 2026 → 115. */
-const currentRocYear = () => Number(taipeiDateTime(new Date()).slice(0, 4)) - 1911;
+const currentRocYear = () => Number(taipeiToday().slice(0, 4)) - 1911;
+
+/**
+ * The first day of the month `months` months before the current Taipei month,
+ * as `YYYY-MM-DD`. Anchored to the 1st so no day-clamping can shorten the
+ * window (13 months before 31 March is 28 February, not 3 March).
+ */
+function taipeiMonthStartBefore(months: number): string {
+  const [y, m] = taipeiToday().split("-").map(Number);
+  const d = new Date(Date.UTC(y as number, (m as number) - 1 - months, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/**
+ * How far back {@link SimpanyProvider.listReceipts} looks by default. A rolling
+ * window rather than the calendar year: on 5 January a year-to-date default
+ * would silently hide December's invoices, and a duplicate check that reads
+ * "nothing found" there issues a second invoice for the same order — expensive,
+ * since a cross-period duplicate can only be undone with an allowance.
+ */
+const LIST_WINDOW_MONTHS = 13;
 
 /** provider-specific fields callers may pass via `input.providerOptions`. */
 interface SimpanyProviderOptions {
@@ -368,19 +391,20 @@ export class SimpanyProvider implements InvoiceProvider {
   /**
    * 發票列表 — list issued invoices (raw rows). The API REQUIRES `status` +
    * `startDate` + `endDate`, all three (verified live: anything less is a 422,
-   * and `yearMonth` is not accepted) — they default to `status=ALL` over the
-   * current Taipei calendar year. Override via `{ status, startDate, endDate,
-   * page, limit }`. Read-only.
+   * and `yearMonth` is not accepted) — they default to `status=ALL` over a
+   * rolling {@link LIST_WINDOW_MONTHS}-month window ending today, NOT the
+   * calendar year, so the result never has a blind spot at the year boundary.
+   * Override via `{ status, startDate, endDate, page, limit }`; pass explicit
+   * dates whenever you need a specific period rather than "recently". Read-only.
    */
   async listReceipts(
     query: Record<string, string | number> = {},
   ): Promise<Array<Record<string, unknown>>> {
     const cid = await this.resolveCompanyId();
-    const year = taipeiDateTime(new Date()).slice(0, 4);
     const params = {
       status: "ALL",
-      startDate: `${year}-01-01`,
-      endDate: `${year}-12-31`,
+      startDate: taipeiMonthStartBefore(LIST_WINDOW_MONTHS),
+      endDate: taipeiToday(),
       ...query,
     };
     const qs = new URLSearchParams(

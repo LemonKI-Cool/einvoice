@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   Capability,
   CarrierType,
@@ -416,9 +416,39 @@ describe("read-only helpers", () => {
     const rows = await testProvider().listReceipts({ limit: 5 });
     expect(rows).toHaveLength(1);
     expect(seen?.searchParams.get("status")).toBe("ALL");
-    expect(seen?.searchParams.get("startDate")).toMatch(/^\d{4}-01-01$/);
-    expect(seen?.searchParams.get("endDate")).toMatch(/^\d{4}-12-31$/);
     expect(seen?.searchParams.get("limit")).toBe("5");
+
+    // The default window rolls back 13 months from today rather than covering
+    // the calendar year, so it never blanks out last December on 5 January.
+    const today = taipeiDateTime(new Date()).slice(0, 10);
+    const start = seen?.searchParams.get("startDate") ?? "";
+    expect(seen?.searchParams.get("endDate")).toBe(today);
+    expect(start).toMatch(/^\d{4}-\d{2}-01$/);
+    const monthsBack =
+      (Number(today.slice(0, 4)) - Number(start.slice(0, 4))) * 12 +
+      (Number(today.slice(5, 7)) - Number(start.slice(5, 7)));
+    expect(monthsBack).toBe(13);
+  });
+
+  it("listReceipts still covers last December when called in early January", async () => {
+    let seen: URL | undefined;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        seen = new URL(request.url);
+        return rok([]);
+      }),
+    );
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-05T12:00:00+08:00"));
+      await testProvider().listReceipts();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(seen?.searchParams.get("startDate")).toBe("2024-12-01");
+    expect(seen?.searchParams.get("endDate")).toBe("2026-01-05");
   });
 
   it("listReceipts lets callers override the defaulted params", async () => {
