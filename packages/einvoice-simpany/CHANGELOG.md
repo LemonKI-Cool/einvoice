@@ -1,5 +1,17 @@
 # @paid-tw/einvoice-simpany
 
+## 0.1.0
+
+### Minor Changes
+
+- First release of the Simpany (simpany.co) adapter. The auth layer and READ
+  path are verified against a live e-invoice-enabled account; the WRITE
+  payloads (issue / void / allowance / void-allowance) are hand-compiled and
+  UNVERIFIED — see the README before use. Implements the five unified
+  operations plus read-only extensions (listReceipts, listTrackNumbers,
+  canIssue, notifyReceipt, printReceipt, getSubscriptionStatus,
+  listFrequentItems).
+
 ## 0.0.0 (unreleased — private)
 
 Initial adapter. Private (not published) until the e-invoice operations are
