@@ -33,7 +33,6 @@ import {
   currentRocYear,
   defaultListWindow,
   exceedsMonthSpan,
-  simpanyListWindows,
   taipeiToday,
 } from "./dates.js";
 import { RECEIPT_ENDPOINTS } from "./endpoints.js";
@@ -103,7 +102,7 @@ export interface SimpanyListReceiptsQuery {
    * Window start, `YYYY-MM-DD` (Asia/Taipei). Required by the API; defaults with
    * `endDate` to {@link defaultListWindow}. `endDate` minus `startDate` may not
    * exceed {@link LIST_MAX_SPAN_MONTHS} months — pass a longer range through
-   * {@link simpanyListWindows} instead.
+   * `simpanyListWindows()` instead.
    */
   startDate?: string;
   /** Window end, `YYYY-MM-DD` (Asia/Taipei). Required by the API; defaults to today. */
@@ -420,7 +419,7 @@ export class SimpanyProvider implements InvoiceProvider {
    *
    * The window may not exceed {@link LIST_MAX_SPAN_MONTHS} months; a longer one
    * is rejected here with `VALIDATION` rather than left to come back as the
-   * API's 422. To read further back, loop over {@link simpanyListWindows}.
+   * API's 422. To read further back, loop over `simpanyListWindows()`.
    */
   async listReceipts(
     query: SimpanyListReceiptsQuery = {},
