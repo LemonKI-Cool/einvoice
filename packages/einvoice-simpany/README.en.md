@@ -133,7 +133,8 @@ nothing — handy for verifying the integration, reconciliation, and pre-issue c
 
 | Method | Endpoint | Purpose | Mutates? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | list issued invoices; the API-required `status`+`startDate`+`endDate` default to `ALL` + the current Taipei year, overridable | read-only |
+| `listReceipts(query?)` | GET `/receipts` | list issued invoices; the API-required `status`+`startDate`+`endDate` default to `ALL` + a **rolling 13-month window** (below), overridable | read-only |
+| `canIssue(n?)` | GET (both of the above) | **pre-issue capacity check**: both quota limits at once, naming the bottleneck (below) | read-only |
 | `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=ROC` | **track numbers**: total / used / remaining per range (below; `year` is a **ROC (民國) year**, default current) | read-only |
 | `getSubscriptionStatus()` | GET `/subscription-status` | **plan quota**: `{ status, remainingQuantity }` (below) | read-only |
 | `listFrequentItems()` | GET `/frequent-items` | **frequent items** (reusable name/price presets) | read-only |
@@ -153,6 +154,32 @@ is the **remaining issue count**, useful as a pre-issue check. ⚠️ This is a 
   **Simpany plan** you purchased.
 
 Both must be sufficient to issue: out of numbers → allocate/split a track; out of quota → buy more.
+
+**`canIssue(n)` asks both at once** so callers don't have to reconcile two endpoints:
+
+```ts
+const cap = await provider.canIssue(10);
+if (!cap.ok) {
+  // bottleneck: "SUBSCRIPTION" (buy more quota) or "TRACK_NUMBER" (allocate/split a track)
+  throw new Error(`cannot issue 10 yet — bottleneck: ${cap.bottleneck}`);
+}
+// cap.subscriptionRemaining / cap.trackRemaining / cap.tracks (per-track breakdown)
+```
+
+On a subscription plan the paid quota is often **far smaller** than the remaining
+invoice numbers, so checking only the tracks reads as optimistic.
+⚠️ `trackRemaining` sums **every enabled** track; whether Simpany also enables tracks
+for a future 期別 (not usable today) is unconfirmed, so treat it as an **upper bound**
+and inspect `cap.tracks[].year` / `.month` when that matters.
+
+### The invoice list's default date window
+
+Without explicit dates, `listReceipts()` queries a **rolling 13 months up to today**
+(Asia/Taipei) rather than the calendar year. That is deliberate: a year-to-date window
+has a blind spot every January — called on 5 January it cannot see December's invoices,
+and a pre-issue duplicate check that reads "nothing found" there issues a second invoice
+for the same order, which once the period has closed can only be undone with an
+allowance. Pass **explicit `startDate` / `endDate`** for a specific period.
 
 ### Frequent items
 
@@ -228,6 +255,32 @@ const receiptId = (inv.raw as { id: number }).id;
 await provider.query({ invoiceNumber: inv.invoiceNumber, providerOptions: { receiptId } });
 await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "wrong", providerOptions: { receiptId } });
 ```
+
+### Void or allowance? Read the `can*` flags
+
+Cancelling an invoice is a **void** within the current period but only an **allowance**
+once the period has closed. The detail response answers this directly —
+`canInvalidate` / `canIssueAllowance` (and `canPrint`) are all in `query()`'s `raw`:
+
+```ts
+const q = await provider.query({ invoiceNumber, providerOptions: { receiptId } });
+const { canInvalidate, canIssueAllowance } = q.raw as {
+  canInvalidate: boolean;
+  canIssueAllowance: boolean;
+};
+
+if (canInvalidate) {
+  await provider.void({ invoiceNumber, reason: "wrong", providerOptions: { receiptId } });
+} else if (canIssueAllowance) {
+  await provider.allowance({ ... });
+}
+```
+
+**More reliable than computing the period caller-side**: period rules, MOF upload state
+and whether the invoice was already credited are all settled server-side (verified: a
+cross-period invoice reports `canInvalidate: false`, a current-period one `true`).
+`raw` also carries `uploadStatus` (MOF upload state) and `remainingAmount` (the balance
+left after allowances).
 
 `providerOptions` fields: `receiptId` (**required for void/query/allowance**), `allowanceId`, `draft`, `emails` (notice
 recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
@@ -340,9 +393,12 @@ console.table(
 const receipts = await provider.listReceipts({ limit: 5 });
 console.log(`read ${receipts.length} invoices`);
 
-// 4) remaining plan quota (subscription level — different from track numbers)
-const quota = await provider.getSubscriptionStatus();
-console.log(`plan ${quota.status}, ${quota.remainingQuantity} left`);
+// 4) capacity check: plan quota + track numbers at once, with the bottleneck named
+const cap = await provider.canIssue(1);
+console.log(
+  `can issue: ${cap.ok}; plan ${cap.subscriptionRemaining} left, ` +
+    `${cap.trackRemaining} numbers left${cap.bottleneck ? ` (bottleneck: ${cap.bottleneck})` : ""}`,
+);
 
 // (optional) reusable line-item presets
 const items = await provider.listFrequentItems();
@@ -352,7 +408,7 @@ const items = await provider.listFrequentItems();
 > (government-allocated 字軌); `getSubscriptionStatus().remainingQuantity` is the **Simpany
 > plan** quota (how many issues you've paid for).
 
-- `me()` / `listTrackNumbers()` / `listReceipts()` are adapter **extensions** (beyond the
+- `me()` / `listTrackNumbers()` / `listReceipts()` / `canIssue()` are adapter **extensions** (beyond the
   `InvoiceProvider` interface), for reading/verification only — they mutate nothing.
 - If the account **isn't enrolled** for e-invoice, these return 404 (→ `NOT_FOUND`) — a
   permission/enrollment issue, not a wiring bug.

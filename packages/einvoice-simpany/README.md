@@ -120,7 +120,8 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 
 | 方法 | 端點 | 說明 | 異動? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | 發票列表;API 必填的 `status`+`startDate`+`endDate` 預設為 `ALL`+當年(台北時區),可覆寫 | 唯讀 |
+| `listReceipts(query?)` | GET `/receipts` | 發票列表;API 必填的 `status`+`startDate`+`endDate` 預設為 `ALL` + **往回滾動 13 個月**(見下),可覆寫 | 唯讀 |
+| `canIssue(n?)` | GET(上述兩支) | **開立前額度預檢**:一次檢查訂閱額度與字軌剩餘,回報哪一邊是瓶頸(見下) | 唯讀 |
 | `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=民國年` | **字軌**:每段的總量 / 已開立 / 剩餘(見下;`year` 為**民國年**,預設當年) | 唯讀 |
 | `getSubscriptionStatus()` | GET `/subscription-status` | **訂閱額度**:`{ status, remainingQuantity }`(見下) | 唯讀 |
 | `listFrequentItems()` | GET `/frequent-items` | **常用品項**清單(可重複使用的品名/單價預設) | 唯讀 |
@@ -137,6 +138,28 @@ Simpany 採**訂閱制**:每個方案有可開立張數的額度。`getSubscript
 - **訂閱剩餘**(`getSubscriptionStatus()`):你在 Simpany **買的方案額度**還剩幾張。
 
 兩者都要足夠才開得出來:沒字軌號碼 → 取號 / 拆分字軌;沒訂閱額度 → 加購方案。
+
+**`canIssue(n)` 幫你一次問完**——不必自己兜兩支 API:
+
+```ts
+const cap = await provider.canIssue(10);
+if (!cap.ok) {
+  // bottleneck: "SUBSCRIPTION"(加購方案)或 "TRACK_NUMBER"(取號 / 拆分字軌)
+  throw new Error(`還開不了 10 張,瓶頸在 ${cap.bottleneck}`);
+}
+// cap.subscriptionRemaining / cap.trackRemaining / cap.tracks(各字軌明細)
+```
+
+訂閱制的方案額度**經常遠小於**字軌剩餘號碼,所以只看字軌會過度樂觀。
+⚠️ `trackRemaining` 加總的是**所有啟用中**字軌;Simpany 是否也會把未來期別的字軌設為啟用
+(那些今天還不能用)尚未確認,所以請把它當成**上限**,必要時自行檢視 `cap.tracks[].year` / `.month`。
+
+### 發票列表的預設時間範圍
+
+`listReceipts()` 不傳日期時,預設查 **往回滾動 13 個月至今天**(台北時區),而不是「當年 1/1–12/31」。
+這是刻意的:年度視窗在 1 月會有盲區——1 月 5 日執行時查不到去年 12 月開的發票,而「開立前查有沒有
+重複開過」若讀到空結果就會重複開立;跨期的重複發票只能開折讓收拾,代價很高。
+需要特定期間請**顯式傳 `startDate` / `endDate`**。
 
 ### 常用品項(frequent items)
 
@@ -208,6 +231,29 @@ const receiptId = (inv.raw as { id: number }).id;
 await provider.query({ invoiceNumber: inv.invoiceNumber, providerOptions: { receiptId } });
 await provider.void({ invoiceNumber: inv.invoiceNumber, reason: "開錯", providerOptions: { receiptId } });
 ```
+
+### 該作廢還是該開折讓?讀 `can*` 旗標
+
+同樣是「取消一張發票」,當期的可以**作廢**,跨期的只能開**折讓**。明細回應直接給了答案——
+`canInvalidate` / `canIssueAllowance`(以及 `canPrint`),都在 `query()` 回傳的 `raw` 裡:
+
+```ts
+const q = await provider.query({ invoiceNumber, providerOptions: { receiptId } });
+const { canInvalidate, canIssueAllowance } = q.raw as {
+  canInvalidate: boolean;
+  canIssueAllowance: boolean;
+};
+
+if (canInvalidate) {
+  await provider.void({ invoiceNumber, reason: "開錯", providerOptions: { receiptId } });
+} else if (canIssueAllowance) {
+  await provider.allowance({ ... });
+}
+```
+
+**比呼叫端自己算期別可靠**:期別規則、上傳財政部的狀態、是否已折讓過都由伺服器判斷
+(實測跨期舊發票 `canInvalidate` 為 `false`、當期為 `true`)。`raw` 另有 `uploadStatus`
+(上傳財政部狀態)與 `remainingAmount`(折讓後剩餘金額)可一併參考。
 
 `providerOptions` 可帶的欄位:`receiptId`(**作廢/查詢/折讓必填**)、`allowanceId`、`draft`、`emails`(通知信收件人)、
 `zeroTaxRateReasonCode` / `customsClearanceType`(零稅率用)、`shouldAdjustTaxAmount`(B2B ±1 稅額調整)、
@@ -310,9 +356,12 @@ console.table(
 const receipts = await provider.listReceipts({ limit: 5 });
 console.log(`可讀到 ${receipts.length} 張發票`);
 
-// 4) 訂閱方案剩餘可開立張數(額度層級,與字軌不同)
-const quota = await provider.getSubscriptionStatus();
-console.log(`方案狀態 ${quota.status},剩餘 ${quota.remainingQuantity} 張`);
+// 4) 額度預檢:一次看訂閱額度 + 字軌剩餘,並指出瓶頸
+const cap = await provider.canIssue(1);
+console.log(
+  `可否開立:${cap.ok};方案剩餘 ${cap.subscriptionRemaining} 張、` +
+    `字軌剩餘 ${cap.trackRemaining} 號${cap.bottleneck ? `(瓶頸:${cap.bottleneck})` : ""}`,
+);
 
 // (選) 常用品項
 const items = await provider.listFrequentItems();
@@ -321,7 +370,7 @@ const items = await provider.listFrequentItems();
 > **兩種「剩餘」不要混淆**:`listTrackNumbers()` 是**字軌號碼**的可用範圍(財政部配號);
 > `getSubscriptionStatus().remainingQuantity` 是 **Simpany 訂閱方案**的剩餘可開立張數(你買的額度)。
 
-- `me()` / `listTrackNumbers()` / `listReceipts()` 是本 adapter 的**擴充方法**(超出 `InvoiceProvider`
+- `me()` / `listTrackNumbers()` / `listReceipts()` / `canIssue()` 是本 adapter 的**擴充方法**(超出 `InvoiceProvider`
   介面),專供讀取 / 驗證,不會異動任何資料。
 - 若帳號**尚未開通電子發票**,這些呼叫會回 404(→ `NOT_FOUND`)——那是權限 / 開通問題,不是串接錯誤。
 - `listTrackNumbers({ year })` 的 `year` 是**民國年**(如 115),預設為當年(台北時區);
