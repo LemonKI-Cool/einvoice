@@ -118,6 +118,19 @@ function throttleError(res: Response, path: string): InvoiceError {
 }
 
 /**
+ * An expired/rotated-token failure — the only auth error a re-login can fix.
+ * Reads the HTTP status the transport stamped on the error: the AUTH code alone
+ * is not enough, since it also covers 403 (a permission failure).
+ */
+function isExpiredToken(err: unknown): boolean {
+  return (
+    err instanceof InvoiceError &&
+    err.code === InvoiceErrorCode.AUTH &&
+    (err as { httpStatus?: number }).httpStatus === 401
+  );
+}
+
+/**
  * Stateful Simpany client. Holds the JWT, logs in lazily, and transparently
  * re-logs in once on a 401 — across BOTH hosts (auth + receipt), which share the
  * token. Throws an {@link InvoiceError} on any failure; returns the envelope's
@@ -194,12 +207,10 @@ export class SimpanyClient {
     try {
       return await this.transport<T>(host, method, path, body, this.token);
     } catch (err) {
-      // Re-login once on an auth failure (expired/rotated token), then retry.
-      if (
-        err instanceof InvoiceError &&
-        err.code === InvoiceErrorCode.AUTH &&
-        this.config.password
-      ) {
+      // Re-login once on an expired/rotated token (HTTP 401 specifically), then
+      // retry. 403 also normalizes to AUTH but is a permission failure a fresh
+      // login cannot fix — retrying would only spend login-throttle budget.
+      if (isExpiredToken(err) && this.config.password) {
         await this.login();
         return this.transport<T>(host, method, path, body, this.token);
       }
@@ -259,12 +270,13 @@ export class SimpanyClient {
       try {
         env = JSON.parse(raw) as SimpanyEnvelope<T>;
       } catch (cause) {
-        throw new InvoiceError("Simpany returned a non-JSON response", {
+        const err = new InvoiceError("Simpany returned a non-JSON response", {
           provider: "simpany",
           code: res.ok ? InvoiceErrorCode.PROVIDER : mapSimpanyError(res.status),
           rawCode: String(res.status),
           cause,
         });
+        throw Object.assign(err, { httpStatus: res.status });
       }
     }
 
@@ -273,7 +285,7 @@ export class SimpanyClient {
     if (!res.ok || bodyError) {
       const message =
         env.error?.title || env.error?.message || env.message || `Simpany error ${res.status}`;
-      throw new InvoiceError(message, {
+      const err = new InvoiceError(message, {
         provider: "simpany",
         // A 2xx business error can't be classified by status — default to VALIDATION.
         code: res.ok ? InvoiceErrorCode.VALIDATION : mapSimpanyError(res.status, env.code),
@@ -281,6 +293,8 @@ export class SimpanyClient {
         rawMessage: message,
         raw: env,
       });
+      // The raw HTTP status, for the 401-only re-login gate (`isExpiredToken`).
+      throw Object.assign(err, { httpStatus: res.status });
     }
 
     // Success: prefer the `data` envelope field; fall back to the whole body.
@@ -302,11 +316,8 @@ export class SimpanyClient {
     try {
       return await this.transportFile(method, path, body, this.token);
     } catch (err) {
-      if (
-        err instanceof InvoiceError &&
-        err.code === InvoiceErrorCode.AUTH &&
-        this.config.password
-      ) {
+      // Same gate as `call`: a 401 means an expired token; a 403 does not.
+      if (isExpiredToken(err) && this.config.password) {
         await this.login();
         return this.transportFile(method, path, body, this.token);
       }
@@ -365,13 +376,14 @@ export class SimpanyClient {
       }
       const message =
         env.error?.title || env.error?.message || env.message || `Simpany error ${res.status}`;
-      throw new InvoiceError(message, {
+      const err = new InvoiceError(message, {
         provider: "simpany",
         code: res.ok ? InvoiceErrorCode.VALIDATION : mapSimpanyError(res.status, env.code),
         rawCode: String(env.code ?? res.status),
         rawMessage: message,
         raw: env,
       });
+      throw Object.assign(err, { httpStatus: res.status });
     }
     return {
       contentType: ct || "application/octet-stream",

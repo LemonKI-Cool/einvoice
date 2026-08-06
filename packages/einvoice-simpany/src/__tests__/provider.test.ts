@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   Capability,
   CarrierType,
+  InvoiceCategory,
   PriceMode,
   TaxType,
   supports,
@@ -134,6 +135,37 @@ describe("issue validation (local pre-flight)", () => {
     ).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
+  it("requires buyer.ubn when the category is explicitly B2B", async () => {
+    await expect(
+      testProvider().issue(issueInput({ category: InvoiceCategory.B2B })),
+    ).rejects.toMatchObject({ code: "VALIDATION", message: expect.stringContaining("ubn") });
+  });
+
+  it("rejects a non-TWD currency with UNSUPPORTED instead of dropping it", async () => {
+    await expect(
+      testProvider().issue(issueInput({ currency: "USD", exchangeRate: 32.5 })),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+  });
+
+  it("rejects SPECIAL tax with UNSUPPORTED instead of degrading it to TAXABLE", async () => {
+    await expect(
+      testProvider().issue(issueInput({ taxType: TaxType.SPECIAL })),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+  });
+
+  it("rejects per-item mixed tax types with UNSUPPORTED", async () => {
+    await expect(
+      testProvider().issue(
+        issueInput({
+          items: [
+            { description: "a", quantity: 1, unitPrice: 50, amount: 50, taxType: TaxType.TAXABLE },
+            { description: "b", quantity: 1, unitPrice: 50, amount: 50, taxType: TaxType.TAX_FREE },
+          ],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+  });
+
   it("rejects an item quantity above 999999", async () => {
     await expect(
       testProvider().issue(
@@ -228,7 +260,13 @@ describe("allowance", () => {
       login(),
       me(),
       http.get(rurl(`/c/${CID}/receipts/900`), () =>
-        rok({ id: 900, items: [{ id: 11 }, { id: 12 }] }),
+        rok({
+          id: 900,
+          items: [
+            { id: 11, name: "商品A", quantity: 2, price: 50, amount: 100 },
+            { id: 12, name: "商品B", quantity: 1, price: 30, amount: 30 },
+          ],
+        }),
       ),
       http.post(rurl(`/c/${CID}/receipts/900/draft-allowances`), async ({ request }) => {
         body = await request.json();
@@ -245,6 +283,85 @@ describe("allowance", () => {
     expect(body.items).toEqual([{ id: 11, quantity: 1, price: 50 }]);
     expect(body.emails).toEqual(["c@e.com"]);
     expect(res.allowanceNumber).toBe("ALW0001");
+  });
+
+  it("matches a subset by content, not position — crediting only the second line", async () => {
+    let body: any;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts/900`), () =>
+        rok({
+          id: 900,
+          items: [
+            { id: 11, name: "商品A", quantity: 2, price: 50, amount: 100 },
+            { id: 12, name: "商品B", quantity: 1, price: 30, amount: 30 },
+          ],
+        }),
+      ),
+      http.post(rurl(`/c/${CID}/receipts/900/draft-allowances`), async ({ request }) => {
+        body = await request.json();
+        return rok({ allowanceNumber: "ALW3" });
+      }),
+    );
+    await testProvider().allowance({
+      invoiceNumber: "AB1",
+      allowanceId: "A-4",
+      items: [{ description: "商品B", quantity: 1, unitPrice: 30, amount: 30 }],
+      amount: { salesAmount: 29, taxAmount: 1, totalAmount: 30 },
+      providerOptions: { receiptId: 900 },
+    });
+    // Positional matching would have credited 商品A's line (id 11).
+    expect(body.items).toEqual([{ id: 12, quantity: 1, price: 30 }]);
+  });
+
+  it("sends the per-unit price, not the line subtotal", async () => {
+    let body: any;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts/900`), () =>
+        rok({ id: 900, items: [{ id: 11, name: "商品A", quantity: 2, price: 50, amount: 100 }] }),
+      ),
+      http.post(rurl(`/c/${CID}/receipts/900/draft-allowances`), async ({ request }) => {
+        body = await request.json();
+        return rok({ allowanceNumber: "ALW4" });
+      }),
+    );
+    await testProvider().allowance({
+      invoiceNumber: "AB1",
+      allowanceId: "A-5",
+      items: [{ description: "商品A", quantity: 2, unitPrice: 50, amount: 100 }],
+      amount: { salesAmount: 95, taxAmount: 5, totalAmount: 100 },
+      providerOptions: { receiptId: 900 },
+    });
+    expect(body.items).toEqual([{ id: 11, quantity: 2, price: 50 }]);
+  });
+
+  it("rejects an item that matches several lines ambiguously", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts/900`), () =>
+        rok({
+          id: 900,
+          // Two same-named lines at DIFFERENT prices; the request matches neither.
+          items: [
+            { id: 11, name: "商品A", quantity: 1, price: 40, amount: 40 },
+            { id: 12, name: "商品A", quantity: 1, price: 60, amount: 60 },
+          ],
+        }),
+      ),
+    );
+    await expect(
+      testProvider().allowance({
+        invoiceNumber: "AB1",
+        allowanceId: "A-6",
+        items: [{ description: "商品A", quantity: 1, unitPrice: 50, amount: 50 }],
+        amount: { salesAmount: 48, taxAmount: 2, totalAmount: 50 },
+        providerOptions: { receiptId: 900 },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
   it("accepts a raw items override via providerOptions", async () => {
@@ -400,6 +517,59 @@ describe("query", () => {
       code: "VALIDATION",
       message: expect.stringContaining("receiptId"),
     });
+  });
+
+  it("derives ALLOWANCE from an active allowance row, not the status string", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts/900`), () =>
+        rok({
+          id: 900,
+          invoiceNumber: "AB12345678",
+          status: "ISSUED",
+          issuedAt: "2026-08-05T10:00:00+08:00",
+          taxAmount: 5,
+          untaxedAmount: 100,
+          totalAmount: 105,
+          items: [],
+          allowances: [{ id: 5, invalidatedAt: null }],
+        }),
+      ),
+    );
+    const res = await testProvider().query({
+      invoiceNumber: "AB12345678",
+      providerOptions: { receiptId: 900 },
+    });
+    expect(res.status).toBe("ALLOWANCE");
+  });
+
+  it("ignores voided allowance rows when deriving the status", async () => {
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts/900`), () =>
+        rok({
+          id: 900,
+          invoiceNumber: "AB12345678",
+          status: "ISSUED",
+          issuedAt: "2026-08-05T10:00:00+08:00",
+          taxAmount: 5,
+          untaxedAmount: 100,
+          totalAmount: 105,
+          items: [],
+          allowances: [
+            { id: 5, invalidatedAt: "2026-08-06T00:00:00+08:00" },
+            { id: 6, status: "INVALID" },
+          ],
+        }),
+      ),
+    );
+    const res = await testProvider().query({
+      invoiceNumber: "AB12345678",
+      providerOptions: { receiptId: 900 },
+    });
+    expect(res.status).toBe("ISSUED");
   });
 });
 
@@ -825,6 +995,13 @@ describe("subscription quota / frequent items", () => {
       bottleneck: "TRACK_NUMBER",
       trackRemaining: 0,
     });
+  });
+
+  it("canIssue rejects a non-positive or fractional count before any request", async () => {
+    // No MSW handlers: reaching the network at all would fail the test.
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      await expect(testProvider().canIssue(bad)).rejects.toMatchObject({ code: "VALIDATION" });
+    }
   });
 
   it("listFrequentItems returns the raw rows", async () => {

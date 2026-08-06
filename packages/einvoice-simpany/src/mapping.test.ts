@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CarrierType, InvoiceStatus, TaxType } from "@paid-tw/einvoice";
 import {
   buyerEmails,
+  hasActiveAllowance,
   simpanyCarrier,
   simpanyTaxType,
   toInvoiceStatus,
@@ -110,13 +111,31 @@ describe("trackUsage", () => {
 describe("toInvoiceStatus", () => {
   it.each([
     ["ISSUED", InvoiceStatus.ISSUED],
-    ["DRAFT", InvoiceStatus.ISSUED],
     ["INVALID", InvoiceStatus.VOIDED],
     ["CANCELED", InvoiceStatus.VOIDED],
-    ["EXPIRED", InvoiceStatus.ALLOWANCE],
-    ["something-else", InvoiceStatus.ISSUED],
-    [undefined, InvoiceStatus.ISSUED],
   ])("%s → %s", (input, expected) => {
     expect(toInvoiceStatus(input)).toBe(expected);
+  });
+
+  it.each([["DRAFT"], ["EXPIRED"], ["something-else"], [undefined]])(
+    "refuses to fabricate a status for %s",
+    (input) => {
+      expect(() => toInvoiceStatus(input)).toThrowError(/no unified/);
+    },
+  );
+});
+
+describe("hasActiveAllowance", () => {
+  it("is true only for a row without a void mark", () => {
+    expect(hasActiveAllowance([{ id: 5, invalidatedAt: null }])).toBe(true);
+    expect(hasActiveAllowance([{ id: 5, status: "ISSUED" }])).toBe(true);
+  });
+
+  it("discounts voided rows, empty arrays and non-arrays", () => {
+    expect(hasActiveAllowance([{ id: 5, invalidatedAt: "2026-08-06T00:00:00+08:00" }])).toBe(false);
+    expect(hasActiveAllowance([{ id: 5, status: "INVALID" }])).toBe(false);
+    expect(hasActiveAllowance([{ id: 5, status: "CANCELED" }])).toBe(false);
+    expect(hasActiveAllowance([])).toBe(false);
+    expect(hasActiveAllowance(undefined)).toBe(false);
   });
 });

@@ -105,6 +105,24 @@ describe("token auth", () => {
     expect(calls).toBe(2);
   });
 
+  it("does not re-login on a 403 — a fresh token cannot fix a permission failure", async () => {
+    let logins = 0;
+    let calls = 0;
+    server.use(
+      http.post(url("/login"), () => {
+        logins++;
+        return okLogin();
+      }),
+      http.get(url("/me"), () => {
+        calls++;
+        return fail(403, "forbidden");
+      }),
+    );
+    await expect(client().me()).rejects.toMatchObject({ code: "AUTH" });
+    expect(logins).toBe(1); // the lazy initial login only
+    expect(calls).toBe(1); // no retry
+  });
+
   it("does not retry a 401 when it cannot re-login (token-only, no password)", async () => {
     let calls = 0;
     server.use(
@@ -262,6 +280,21 @@ describe("receipt host (member2)", () => {
     const res = await client().receiptFile("POST", "/c/3432/receipts/900/print", {});
     expect(res.contentType).toContain("application/pdf");
     expect(logins).toBe(2);
+  });
+
+  it("receiptFile does not re-login on a 403", async () => {
+    let logins = 0;
+    server.use(
+      http.post(url("/login"), () => {
+        logins++;
+        return okLogin();
+      }),
+      http.post(rurl("/c/3432/receipts/900/print"), () => rframeworkError("forbidden", 403)),
+    );
+    await expect(
+      client().receiptFile("POST", "/c/3432/receipts/900/print", {}),
+    ).rejects.toMatchObject({ code: "AUTH" });
+    expect(logins).toBe(1);
   });
 
   it("honours a receiptBaseUrl override", async () => {

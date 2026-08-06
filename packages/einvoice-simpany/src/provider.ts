@@ -38,6 +38,7 @@ import {
 import { RECEIPT_ENDPOINTS } from "./endpoints.js";
 import {
   buyerEmails,
+  hasActiveAllowance,
   simpanyCarrier,
   simpanyTaxType,
   toInvoiceStatus,
@@ -238,7 +239,9 @@ export class SimpanyProvider implements InvoiceProvider {
       randomCode: String(r.randomNumber ?? r.randomCode ?? ""),
       orderId: input.orderId,
       totalAmount: Number(r.totalAmount ?? input.amount.totalAmount),
-      status: toInvoiceStatus(r.status),
+      // A 2xx issue response IS an issued invoice; some responses omit `status`
+      // (observed on B2B), so only a present value goes through the strict map.
+      status: r.status == null ? InvoiceStatus.ISSUED : toInvoiceStatus(r.status),
       raw: r,
     };
   }
@@ -259,9 +262,12 @@ export class SimpanyProvider implements InvoiceProvider {
   /**
    * 開立折讓 — creates a DRAFT allowance:
    * `POST /c/{companyId}/receipts/{receiptId}/draft-allowances` with
-   * `{ emails, items:[{ id, quantity, price }] }`. Each item's `id` is the
-   * original receipt line id; unless overridden via `providerOptions.items`, the
-   * lines are matched to the invoice's items positionally (a detail lookup).
+   * `{ emails, items:[{ id, quantity, price }] }` (`price` is PER UNIT). Each
+   * item's `id` is the original receipt line id; unless overridden via
+   * `providerOptions.items`, the lines are matched to the invoice's items by
+   * content (description, then unit price) — `input.items` may be any subset of
+   * the invoice, so positions carry no meaning. An item that doesn't match a
+   * unique line is rejected rather than guessed.
    */
   async allowance(input: AllowanceInput): Promise<AllowanceResult> {
     parseInput(allowanceInputSchema, input, "simpany");
@@ -271,20 +277,27 @@ export class SimpanyProvider implements InvoiceProvider {
 
     let items = opts.items;
     if (!items) {
-      const detail = await this.client.receipt<{ items?: Array<{ id?: string | number }> }>(
-        "GET",
-        RECEIPT_ENDPOINTS.detail(cid, receiptId),
-      );
-      const lines = detail.items ?? [];
+      const detail = await this.client.receipt<{
+        items?: Array<{ id?: string | number; name?: string; price?: number }>;
+      }>("GET", RECEIPT_ENDPOINTS.detail(cid, receiptId));
+      // Each input item claims one distinct invoice line.
+      const unclaimed = [...(detail.items ?? [])];
       items = input.items.map((it, i) => {
-        const id = lines[i]?.id;
-        if (id == null && this.config.validatePayload !== false) {
+        const byName = unclaimed.filter((l) => l.name === it.description);
+        const line =
+          byName.find((l) => Number(l.price) === it.unitPrice) ??
+          (byName.length === 1 ? byName[0] : undefined);
+        if (line?.id == null) {
+          if (this.config.validatePayload === false) {
+            return { id: line?.id, quantity: it.quantity, price: it.unitPrice };
+          }
           throw fail(
-            `Simpany allowance: could not match item #${i} to an invoice line — ` +
-              `pass providerOptions.items ([{ id, quantity, price }]) explicitly`,
+            `Simpany allowance: could not match item #${i} ("${it.description}") to a unique ` +
+              `invoice line — pass providerOptions.items ([{ id, quantity, price }]) explicitly`,
           );
         }
-        return { id, quantity: it.quantity, price: it.amount };
+        unclaimed.splice(unclaimed.indexOf(line), 1);
+        return { id: line.id, quantity: it.quantity, price: it.unitPrice };
       });
     }
 
@@ -341,12 +354,20 @@ export class SimpanyProvider implements InvoiceProvider {
     // ±1 tax adjustment makes untaxed + tax ≠ total).
     const sales = r.untaxedAmount != null ? Number(r.untaxedAmount) : total - tax;
     const emails = (r.buyerEmails as string[] | undefined) ?? [];
+    // ALLOWANCE comes from the detail's own allowance rows, not the status
+    // string — Simpany reports the credited state via `allowances`, and only an
+    // invoice that is still in force can carry one.
+    const base = toInvoiceStatus(r.status);
+    const status =
+      base === InvoiceStatus.ISSUED && hasActiveAllowance(r.allowances)
+        ? InvoiceStatus.ALLOWANCE
+        : base;
     return {
       invoiceNumber: String(r.invoiceNumber ?? ""),
       invoiceDate: parseTaipeiDate(r.issuedAt ?? r.createdAt),
       randomCode: String(r.randomNumber ?? ""),
       orderId: r.customId ? String(r.customId) : undefined,
-      status: toInvoiceStatus(r.status),
+      status,
       amount: { salesAmount: sales, taxAmount: tax, totalAmount: total },
       buyer: {
         name: r.buyerName ? String(r.buyerName) : undefined,
@@ -370,8 +391,31 @@ export class SimpanyProvider implements InvoiceProvider {
    * `config.validatePayload === false`. Throws `InvoiceError(VALIDATION)`.
    */
   private validateIssue(input: IssueInvoiceInput, category: string): void {
+    // Inputs the wire format cannot express are rejected (UNSUPPORTED) rather
+    // than silently reshaped into a different invoice — see `capabilities`.
+    if (input.currency && input.currency !== "TWD") {
+      throw fail(
+        `Simpany does not support foreign-currency invoices; currency must be TWD (got ${input.currency})`,
+        InvoiceErrorCode.UNSUPPORTED,
+      );
+    }
+    if (input.taxType === TaxType.SPECIAL) {
+      throw fail(
+        "Simpany does not support 特種稅額 (SPECIAL) invoices — its taxType enum has no special-tax member",
+        InvoiceErrorCode.UNSUPPORTED,
+      );
+    }
+    if (input.items.some((it) => it.taxType && it.taxType !== input.taxType)) {
+      throw fail(
+        "Simpany does not support mixed tax types — taxType is invoice-level only (no MIXED_TAX capability)",
+        InvoiceErrorCode.UNSUPPORTED,
+      );
+    }
     if (category === "B2B" && !input.buyer.name) {
       throw fail("Simpany B2B issue requires buyer.name");
+    }
+    if (category === "B2B" && !input.buyer.ubn) {
+      throw fail("Simpany B2B issue requires buyer.ubn (the 統一編號 the invoice is filed under)");
     }
     // The web form requires an email on every issue (the notification recipient).
     if (!input.buyer.email) {
@@ -603,6 +647,9 @@ export class SimpanyProvider implements InvoiceProvider {
    * early — inspect `tracks[].year` / `.month` when that matters.
    */
   async canIssue(count = 1): Promise<SimpanyIssueCapacity> {
+    if (!Number.isInteger(count) || count < 1) {
+      throw fail(`Simpany canIssue: count must be a positive integer (got ${count})`);
+    }
     const quota = await this.getSubscriptionStatus();
     const tracks = await this.listTrackNumbers({ enabledOnly: true });
     const trackRemaining = tracks.reduce((sum, t) => sum + t.remaining, 0);

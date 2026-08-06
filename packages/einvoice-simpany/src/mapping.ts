@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   CarrierType,
+  InvoiceError,
+  InvoiceErrorCode,
   InvoiceStatus,
   type Buyer,
   type Carrier,
@@ -47,7 +49,11 @@ export const SIMPANY_STATUS = {
   EXPIRED: "EXPIRED",
 } as const;
 
-/** Unified {@link TaxType} → Simpany `taxType`. SPECIAL issues as TAXABLE. */
+/**
+ * Unified {@link TaxType} → Simpany `taxType`. SPECIAL has no Simpany member and
+ * is rejected upstream (UNSUPPORTED) before this map runs; it only degrades to
+ * TAXABLE here on the `validatePayload:false` escape hatch.
+ */
 export function simpanyTaxType(taxType: TaxType): string {
   switch (taxType) {
     case "ZERO_RATED":
@@ -131,10 +137,40 @@ export function trackUsage(row: Record<string, unknown>): TrackNumberUsage {
   return { total, used, remaining: Math.max(0, total - used) };
 }
 
-/** Simpany `status` → unified {@link InvoiceStatus}. */
+/**
+ * Simpany `status` → unified {@link InvoiceStatus}. Only states with a faithful
+ * unified equivalent are mapped; `DRAFT`, `EXPIRED` and unrecognised values
+ * throw (PROVIDER) rather than being reported as legally ISSUED — the wire
+ * value stays readable via `rawCode` and the response's `raw.status`.
+ * {@link InvoiceStatus.ALLOWANCE} is never derived here: it comes from the
+ * detail's `allowances` rows in `query` (see {@link hasActiveAllowance}).
+ */
 export function toInvoiceStatus(status: unknown): InvoiceStatus {
   const s = String(status ?? "").toUpperCase();
+  if (s === SIMPANY_STATUS.ISSUED) return InvoiceStatus.ISSUED;
   if (s === SIMPANY_STATUS.INVALID || s === SIMPANY_STATUS.CANCELED) return InvoiceStatus.VOIDED;
-  if (s === SIMPANY_STATUS.EXPIRED) return InvoiceStatus.ALLOWANCE;
-  return InvoiceStatus.ISSUED;
+  throw new InvoiceError(
+    `Simpany receipt status "${s}" has no unified InvoiceStatus equivalent — read raw.status`,
+    {
+      provider: "simpany",
+      code: InvoiceErrorCode.PROVIDER,
+      rawCode: s || undefined,
+      rawMessage: `unmapped receipt status ${s}`,
+    },
+  );
+}
+
+/**
+ * Whether a receipt detail's `allowances` rows include one still in force.
+ * A row is discounted when it carries a void mark — `invalidatedAt`, or an
+ * INVALID / CANCELED status; anything else counts as active.
+ */
+export function hasActiveAllowance(allowances: unknown): boolean {
+  if (!Array.isArray(allowances)) return false;
+  return allowances.some((entry) => {
+    const row = (entry ?? {}) as Record<string, unknown>;
+    const s = String(row.status ?? "").toUpperCase();
+    if (s === SIMPANY_STATUS.INVALID || s === SIMPANY_STATUS.CANCELED) return false;
+    return row.invalidatedAt == null;
+  });
 }
