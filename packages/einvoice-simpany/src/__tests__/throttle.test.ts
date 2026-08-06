@@ -42,6 +42,12 @@ describe("helpers", () => {
       retryAfterSeconds(new Headers({ "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" })),
     ).toBeUndefined();
   });
+
+  it("rejects fractional and negative Retry-After values", () => {
+    expect(retryAfterSeconds(new Headers({ "retry-after": "0" }))).toBe(0);
+    expect(retryAfterSeconds(new Headers({ "retry-after": "1.5" }))).toBeUndefined();
+    expect(retryAfterSeconds(new Headers({ "retry-after": "-3" }))).toBeUndefined();
+  });
 });
 
 describe("a throttled login", () => {
@@ -96,6 +102,18 @@ describe("a throttled authenticated call", () => {
       .catch((e: unknown) => e)) as { message: string; code: string };
     expect(err.message).toContain("rate limit");
     expect(err.code).not.toBe(InvoiceErrorCode.AUTH);
+  });
+
+  it("does not blame login when the throttled endpoint is another path", async () => {
+    server.use(
+      http.post(url("/login"), () => okLogin()),
+      http.get(url("/me"), () => throttled()),
+    );
+    const err = (await testProvider()
+      .me()
+      .catch((e: unknown) => e)) as { message: string };
+    expect(err.message).toContain("/me");
+    expect(err.message).not.toContain("login is the throttled endpoint");
   });
 
   it("does not trigger the 401 re-login path, which would spend more budget", async () => {

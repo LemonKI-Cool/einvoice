@@ -85,12 +85,16 @@ export function isThrottled(status: number): boolean {
   return status === 429;
 }
 
-/** `Retry-After` in whole seconds, when the server sent a parseable one. */
+/**
+ * `Retry-After` in whole seconds, when the server sent a valid delta-seconds
+ * value (a non-negative integer, per RFC 9110). The HTTP-date form and any
+ * malformed value yield `undefined`.
+ */
 export function retryAfterSeconds(headers: Headers): number | undefined {
   const value = headers.get("retry-after");
   if (!value) return undefined;
   const seconds = Number(value);
-  return Number.isFinite(seconds) ? seconds : undefined;
+  return Number.isInteger(seconds) && seconds >= 0 ? seconds : undefined;
 }
 
 /** Build the throttle error, naming the wait so callers can back off. */
@@ -99,17 +103,18 @@ function throttleError(res: Response, path: string): InvoiceError {
   const limit = res.headers.get("x-ratelimit-limit");
   const wait = retryAfter === undefined ? "" : ` Retry after ${retryAfter}s.`;
   const cap = limit ? ` (limit ${limit}/min)` : "";
-  return new InvoiceError(
-    `Simpany rate limit hit on ${path}${cap}.${wait} Reuse one SimpanyClient — ` +
-      `each new client logs in again, and login is the throttled endpoint.`,
-    {
-      provider: "simpany",
-      code: mapSimpanyError(res.status),
-      rawCode: String(res.status),
-      rawMessage: `HTTP 429${cap}`,
-      raw: { status: 429, retryAfterSeconds: retryAfter, limit },
-    },
-  );
+  // The client-reuse advice only makes sense when login itself was throttled.
+  const advice =
+    path === AUTH_ENDPOINTS.login
+      ? " Reuse one SimpanyClient — each new client logs in again, and login is the throttled endpoint."
+      : " Back off before retrying.";
+  return new InvoiceError(`Simpany rate limit hit on ${path}${cap}.${wait}${advice}`, {
+    provider: "simpany",
+    code: mapSimpanyError(res.status),
+    rawCode: String(res.status),
+    rawMessage: `HTTP 429${cap}`,
+    raw: { status: 429, retryAfterSeconds: retryAfter, limit },
+  });
 }
 
 /**
