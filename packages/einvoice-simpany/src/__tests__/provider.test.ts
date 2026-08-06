@@ -406,20 +406,43 @@ describe("query", () => {
 });
 
 describe("read-only helpers", () => {
-  it("listReceipts returns the rows and forwards query params", async () => {
-    let seenUrl = "";
+  it("listReceipts defaults the REQUIRED status/startDate/endDate and forwards extras", async () => {
+    let seen: URL | undefined;
     server.use(
       login(),
       me(),
       http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
-        seenUrl = request.url;
-        return rok([{ id: 1, invoiceNumber: "AB1" }]);
+        seen = new URL(request.url);
+        // A list body that is NOT unwrapped to a bare array (no top-level `data`).
+        return HttpResponse.json({ list: [{ id: 1, invoiceNumber: "AB1" }] });
       }),
     );
-    const rows = await testProvider().listReceipts({ status: "ALL", limit: 5 });
+    const rows = await testProvider().listReceipts({ limit: 5 });
     expect(rows).toHaveLength(1);
-    expect(seenUrl).toContain("status=ALL");
-    expect(seenUrl).toContain("limit=5");
+    expect(seen?.searchParams.get("status")).toBe("ALL");
+    expect(seen?.searchParams.get("startDate")).toMatch(/^\d{4}-01-01$/);
+    expect(seen?.searchParams.get("endDate")).toMatch(/^\d{4}-12-31$/);
+    expect(seen?.searchParams.get("limit")).toBe("5");
+  });
+
+  it("listReceipts lets callers override the defaulted params", async () => {
+    let seen: URL | undefined;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        seen = new URL(request.url);
+        return rok([]);
+      }),
+    );
+    await testProvider().listReceipts({
+      status: "ISSUED",
+      startDate: "2026-01-01",
+      endDate: "2026-06-30",
+    });
+    expect(seen?.searchParams.get("status")).toBe("ISSUED");
+    expect(seen?.searchParams.get("startDate")).toBe("2026-01-01");
+    expect(seen?.searchParams.get("endDate")).toBe("2026-06-30");
   });
 
   it("listTrackNumbers sends the ROC year and maps a real (masked) track row", async () => {

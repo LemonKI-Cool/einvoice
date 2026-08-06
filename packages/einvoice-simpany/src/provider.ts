@@ -356,20 +356,27 @@ export class SimpanyProvider implements InvoiceProvider {
   // they exercise auth + company scope + a real receipt-host GET.
 
   /**
-   * 發票列表 — list issued invoices (raw rows). Pass query params like
-   * `{ status, startDate, endDate, page, limit }`. Read-only.
+   * 發票列表 — list issued invoices (raw rows). The API REQUIRES `status` +
+   * `startDate` + `endDate`, all three (verified live: anything less is a 422,
+   * and `yearMonth` is not accepted) — they default to `status=ALL` over the
+   * current Taipei calendar year. Override via `{ status, startDate, endDate,
+   * page, limit }`. Read-only.
    */
   async listReceipts(
     query: Record<string, string | number> = {},
   ): Promise<Array<Record<string, unknown>>> {
     const cid = await this.resolveCompanyId();
+    const year = taipeiDateTime(new Date()).slice(0, 4);
+    const params = {
+      status: "ALL",
+      startDate: `${year}-01-01`,
+      endDate: `${year}-12-31`,
+      ...query,
+    };
     const qs = new URLSearchParams(
-      Object.entries(query).map(([k, v]): [string, string] => [k, String(v)]),
+      Object.entries(params).map(([k, v]): [string, string] => [k, String(v)]),
     ).toString();
-    const res = await this.client.receipt<unknown>(
-      "GET",
-      `${RECEIPT_ENDPOINTS.list(cid)}${qs ? `?${qs}` : ""}`,
-    );
+    const res = await this.client.receipt<unknown>("GET", `${RECEIPT_ENDPOINTS.list(cid)}?${qs}`);
     return toArray(res);
   }
 

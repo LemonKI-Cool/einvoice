@@ -30,7 +30,11 @@ export const AUTH_ENDPOINTS = {
 export const RECEIPT_ENDPOINTS = {
   /** 開立發票. `type` is "b2b" | "b2c" (lowercased). Body = the issue payload. */
   issue: (c: string | number, type: string) => `/c/${c}/receipts/${type.toLowerCase()}`,
-  /** 發票列表. Query `{ status, startDate, endDate, yearMonth, page, limit }`. */
+  /**
+   * 發票列表. Query `{ status, startDate, endDate, page, limit }` — `status` +
+   * `startDate` + `endDate` are ALL required (anything less is a 422);
+   * `status=ALL` works; `yearMonth` is NOT accepted. (verified live)
+   */
   list: (c: string | number) => `/c/${c}/receipts`,
   /** 發票明細（by internal id）→ `.data`. */
   detail: (c: string | number, id: string | number) => `/c/${c}/receipts/${id}`,
@@ -45,7 +49,7 @@ export const RECEIPT_ENDPOINTS = {
   /** 作廢「未確認」折讓（DELETE, by draft-allowance id）. Body `{ reason, emails }`. */
   voidDraftAllowance: (c: string | number, draftId: string | number) =>
     `/c/${c}/draft-allowances/${draftId}`,
-  /** 折讓列表. */
+  /** 折讓列表. `status` is required too (verified live) — use `status=ALL` + a date range. */
   allowanceList: (c: string | number) => `/c/${c}/allowances`,
   /** 折讓明細（by allowance id）→ `.data`. */
   allowanceDetail: (c: string | number, allowanceId: string | number) =>
