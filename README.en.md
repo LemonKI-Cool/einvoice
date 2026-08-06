@@ -8,8 +8,8 @@
 **English** ｜ [繁體中文](./README.md)
 
 Unified **e-invoice (電子發票) SDK for Taiwan**. One provider-agnostic interface,
-many provider adapters — switch between Amego, ECPay, ezPay, ezReceipt, and more
-without touching your business logic.
+many provider adapters — switch between Amego, ECPay, ezPay, ezReceipt, Simpany,
+and more without touching your business logic.
 
 All Taiwan value-added centers wrap the same MOF (財政部) MIG 4.0 spec, so the core
 operations are identical: **issue / void / allowance / void-allowance / query**
@@ -26,6 +26,7 @@ provider be a thin adapter.
 | [`@paid-tw/einvoice-ecpay`](./packages/einvoice-ecpay) | adapter | ECPay (綠界, ecpay.com.tw) — B2C 2.0, AES-encrypted |
 | [`@paid-tw/einvoice-ezpay-crossborder`](./packages/einvoice-ezpay-crossborder) | adapter | ezPay cross-border (境外電商) — B2C, foreign-currency-native |
 | [`@paid-tw/einvoice-ezreceipt`](./packages/einvoice-ezreceipt) | adapter | ezReceipt (易發票, COIMOTION) — order-centric REST, token auth |
+| [`@paid-tw/einvoice-simpany`](./packages/einvoice-simpany) | adapter | Simpany (simpany.co) — JWT auth, two-host REST; ⚠️ write endpoints unverified (see the package README) |
 
 Install only the providers you use — adapters are separate packages, so an app
 that only uses Amego never pulls in another provider's dependencies.
@@ -101,19 +102,19 @@ assertSupports(invoices, Capability.SCHEDULED_ISSUE);
 Each adapter declares a `capabilities` set; feature-detect at runtime with
 `supports(provider, cap)` / `assertSupports(provider, cap)`.
 
-| Capability | Amego | ECPay | ezPay | ezPay X-border | ezReceipt |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| `ISSUE` — issue (開立) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `VOID` — void (作廢) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `ALLOWANCE` — allowance (折讓) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `VOID_ALLOWANCE` — void allowance (折讓作廢) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `QUERY` — query (查詢) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `B2B` — buyer with tax ID (統一編號) | ✅ | ✅ | ✅ | — | ✅ |
-| `MIXED_TAX` — mixed tax-rate invoice | ✅ | ✅ | ✅ | — | ✅ |
-| `QUERY_BY_ORDER_ID` — look up by order id | ✅ | ✅ | ✅ | ✅ | — |
-| `SCHEDULED_ISSUE` — schedule future issuance | — | ✅ | ✅ | ✅ | — |
-| `CARRIER_VALIDATION` — mobile barcode / charity code (手機條碼 / 愛心碼) | ✅ | ✅ | ✅ | — | ✅ |
-| `FOREIGN_CURRENCY` — `currency` + `exchangeRate` annotation | ✅ | — | — | ✅ | — |
+| Capability | Amego | ECPay | ezPay | ezPay X-border | ezReceipt | Simpany |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `ISSUE` — issue (開立) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `VOID` — void (作廢) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `ALLOWANCE` — allowance (折讓) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `VOID_ALLOWANCE` — void allowance (折讓作廢) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `QUERY` — query (查詢) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `B2B` — buyer with tax ID (統一編號) | ✅ | ✅ | ✅ | — | ✅ | ✅ |
+| `MIXED_TAX` — mixed tax-rate invoice | ✅ | ✅ | ✅ | — | ✅ | — |
+| `QUERY_BY_ORDER_ID` — look up by order id | ✅ | ✅ | ✅ | ✅ | — | — |
+| `SCHEDULED_ISSUE` — schedule future issuance | — | ✅ | ✅ | ✅ | — | — |
+| `CARRIER_VALIDATION` — mobile barcode / charity code (手機條碼 / 愛心碼) | ✅ | ✅ | ✅ | — | ✅ | — |
+| `FOREIGN_CURRENCY` — `currency` + `exchangeRate` annotation | ✅ | — | — | ✅ | — | — |
 
 A provider that lacks `FOREIGN_CURRENCY` rejects a non-TWD `currency` with an
 `UNSUPPORTED` error rather than silently dropping the annotation.

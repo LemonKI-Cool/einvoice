@@ -8,7 +8,7 @@
 [English](./README.en.md) ｜ **繁體中文**
 
 統一的**台灣電子發票 SDK**。一套與供應商無關的介面，搭配多個供應商轉接器 —— 在
-Amego、ECPay、ezPay、ezReceipt 等供應商之間切換，完全不需要動到你的商業邏輯。
+Amego、ECPay、ezPay、ezReceipt、Simpany 等供應商之間切換，完全不需要動到你的商業邏輯。
 
 台灣所有加值中心都包裝同一套財政部 MIG 4.0 規格，因此核心操作完全一致：**開立 /
 作廢 / 折讓 / 折讓作廢 / 查詢**。本 SDK 將這些操作建模一次，讓每個供應商都只是一個
@@ -24,6 +24,7 @@ Amego、ECPay、ezPay、ezReceipt 等供應商之間切換，完全不需要動�
 | [`@paid-tw/einvoice-ecpay`](./packages/einvoice-ecpay) | adapter | ECPay 綠界 (ecpay.com.tw) — B2C 2.0，AES 加密 |
 | [`@paid-tw/einvoice-ezpay-crossborder`](./packages/einvoice-ezpay-crossborder) | adapter | ezPay 境外電商 — 跨境 B2C、原生外幣 |
 | [`@paid-tw/einvoice-ezreceipt`](./packages/einvoice-ezreceipt) | adapter | ezReceipt 易發票 (COIMOTION) — 訂單導向 REST、token 認證 |
+| [`@paid-tw/einvoice-simpany`](./packages/einvoice-simpany) | adapter | Simpany (simpany.co) — JWT 認證、雙主機 REST；⚠️ 寫入端點未經實測（見套件 README） |
 
 只需安裝你會用到的供應商 —— 轉接器是各自獨立的套件，因此一個只用 Amego 的應用程式
 永遠不會拉進其他供應商的相依套件。
@@ -98,19 +99,19 @@ assertSupports(invoices, Capability.SCHEDULED_ISSUE);
 每個轉接器都會宣告一組 `capabilities`；可在執行期用
 `supports(provider, cap)` / `assertSupports(provider, cap)` 偵測。
 
-| 能力 | Amego | ECPay | ezPay | ezPay 跨境 | ezReceipt |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| `ISSUE` — 開立 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `VOID` — 作廢 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `ALLOWANCE` — 折讓 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `VOID_ALLOWANCE` — 折讓作廢 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `QUERY` — 查詢 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `B2B` — 統一編號買受人 | ✅ | ✅ | ✅ | — | ✅ |
-| `MIXED_TAX` — 混合稅率發票 | ✅ | ✅ | ✅ | — | ✅ |
-| `QUERY_BY_ORDER_ID` — 以訂單編號查詢 | ✅ | ✅ | ✅ | ✅ | — |
-| `SCHEDULED_ISSUE` — 預約未來開立 | — | ✅ | ✅ | ✅ | — |
-| `CARRIER_VALIDATION` — 手機條碼 / 愛心碼 | ✅ | ✅ | ✅ | — | ✅ |
-| `FOREIGN_CURRENCY` — `currency` + `exchangeRate` 外幣註記 | ✅ | — | — | ✅ | — |
+| 能力 | Amego | ECPay | ezPay | ezPay 跨境 | ezReceipt | Simpany |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `ISSUE` — 開立 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `VOID` — 作廢 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `ALLOWANCE` — 折讓 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `VOID_ALLOWANCE` — 折讓作廢 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `QUERY` — 查詢 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `B2B` — 統一編號買受人 | ✅ | ✅ | ✅ | — | ✅ | ✅ |
+| `MIXED_TAX` — 混合稅率發票 | ✅ | ✅ | ✅ | — | ✅ | — |
+| `QUERY_BY_ORDER_ID` — 以訂單編號查詢 | ✅ | ✅ | ✅ | ✅ | — | — |
+| `SCHEDULED_ISSUE` — 預約未來開立 | — | ✅ | ✅ | ✅ | — | — |
+| `CARRIER_VALIDATION` — 手機條碼 / 愛心碼 | ✅ | ✅ | ✅ | — | ✅ | — |
+| `FOREIGN_CURRENCY` — `currency` + `exchangeRate` 外幣註記 | ✅ | — | — | ✅ | — | — |
 
 不具 `FOREIGN_CURRENCY` 能力的供應商，收到非 TWD 的 `currency` 會拋出
 `UNSUPPORTED` 錯誤，而非靜默丟棄該註記。
