@@ -91,8 +91,14 @@ function toArray(res: unknown): Array<Record<string, unknown>> {
   return inner as Array<Record<string, unknown>>;
 }
 
-const fail = (message: string, code = InvoiceErrorCode.VALIDATION) =>
+const fail = (message: string, code: InvoiceErrorCode = InvoiceErrorCode.VALIDATION) =>
   new InvoiceError(message, { provider: "simpany", code, rawMessage: message });
+
+/** Page size {@link SimpanyProvider.listReceipts} requests while paging through a window. */
+export const LIST_PAGE_SIZE = 500;
+
+/** Runaway guard on that loop — reaching it throws rather than truncating quietly. */
+export const LIST_MAX_PAGES = 200;
 
 /** Query params for {@link SimpanyProvider.listReceipts}. */
 export interface SimpanyListReceiptsQuery {
@@ -107,7 +113,9 @@ export interface SimpanyListReceiptsQuery {
   startDate?: string;
   /** Window end, `YYYY-MM-DD` (Asia/Taipei). Required by the API; defaults to today. */
   endDate?: string;
+  /** Fetch just this page. Opts out of paging through the window. */
   page?: number;
+  /** Cap the rows and make a single request — a sample, not a page size. */
   limit?: number;
   /** Any other param Simpany accepts, forwarded verbatim. */
   [key: string]: string | number | undefined;
@@ -420,22 +428,62 @@ export class SimpanyProvider implements InvoiceProvider {
    * The window may not exceed {@link LIST_MAX_SPAN_MONTHS} months; a longer one
    * is rejected here with `VALIDATION` rather than left to come back as the
    * API's 422. To read further back, loop over `simpanyListWindows()`.
+   *
+   * **Pages through the whole window by default.** The response is a bare array
+   * with no `total`, no `lastPage`, no `meta` of any kind, so a caller handed
+   * one page has no way to tell it is holding a partial answer — and a
+   * duplicate check that silently sees only the first page issues a second
+   * invoice for an order that was already invoiced. Two ways to opt out, both
+   * one request:
+   *
+   * - pass `page` to drive pagination yourself;
+   * - pass `limit` to cap the rows (`{ limit: 5 }` reads a sample, it does not
+   *   page through in fives).
    */
   async listReceipts(
     query: SimpanyListReceiptsQuery = {},
   ): Promise<Array<Record<string, unknown>>> {
-    const { status, startDate, endDate, ...rest } = query;
+    const { status, startDate, endDate, page, limit, ...rest } = query;
     const window = resolveListWindow(startDate, endDate);
     const cid = await this.resolveCompanyId();
-    const qs = new URLSearchParams({ status: status ?? "ALL", ...window });
+
+    const base = new URLSearchParams({ status: status ?? "ALL", ...window });
     for (const [k, v] of Object.entries(rest)) {
-      if (v !== undefined) qs.set(k, String(v));
+      if (v !== undefined) base.set(k, String(v));
     }
-    const res = await this.client.receipt<unknown>(
-      "GET",
-      `${RECEIPT_ENDPOINTS.list(cid)}?${qs.toString()}`,
+    const fetchPage = async (params: Record<string, number> = {}) => {
+      const qs = new URLSearchParams(base);
+      for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+      return toArray(
+        await this.client.receipt<unknown>(
+          "GET",
+          `${RECEIPT_ENDPOINTS.list(cid)}?${qs.toString()}`,
+        ),
+      );
+    };
+
+    if (page !== undefined || limit !== undefined) {
+      return fetchPage({
+        ...(page !== undefined ? { page: Number(page) } : {}),
+        ...(limit !== undefined ? { limit: Number(limit) } : {}),
+      });
+    }
+
+    const rows: Array<Record<string, unknown>> = [];
+    for (let p = 1; p <= LIST_MAX_PAGES; p++) {
+      const batch = await fetchPage({ page: p, limit: LIST_PAGE_SIZE });
+      rows.push(...batch);
+      // Only an empty page ends the loop. A short one is not proof of the end:
+      // the server may cap `limit` below what was asked for, and stopping the
+      // moment a page came back smaller than requested would drop everything
+      // past the cap — the same silent truncation this loop exists to avoid.
+      if (batch.length === 0) return rows;
+    }
+    throw fail(
+      `Simpany listReceipts: still receiving rows after ${LIST_MAX_PAGES} pages of ` +
+        `${LIST_PAGE_SIZE}. Narrow the date window, or pass \`page\` to paginate yourself.`,
+      InvoiceErrorCode.PROVIDER,
     );
-    return toArray(res);
   }
 
   /**

@@ -9,6 +9,7 @@ import {
   taipeiDateTime,
 } from "@paid-tw/einvoice";
 import { defaultListWindow, exceedsMonthSpan } from "../dates.js";
+import { LIST_MAX_PAGES, LIST_PAGE_SIZE } from "../provider.js";
 import { okLogin, okMe, rerror, rok, rpdf, rurl, server, testProvider, url } from "./server.js";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -489,6 +490,91 @@ describe("read-only helpers", () => {
     await expect(testProvider().listReceipts({ endDate: "2026/08/07" })).rejects.toMatchObject({
       code: "VALIDATION",
       message: expect.stringContaining("YYYY-MM-DD"),
+    });
+  });
+
+  it("listReceipts pages through the window until an empty page", async () => {
+    const rowsOnServer = Array.from({ length: LIST_PAGE_SIZE * 2 + 7 }, (_, i) => ({ id: i + 1 }));
+    const pagesSeen: number[] = [];
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        const q = new URL(request.url).searchParams;
+        const limit = Number(q.get("limit"));
+        const page = Number(q.get("page"));
+        pagesSeen.push(page);
+        return rok(rowsOnServer.slice((page - 1) * limit, page * limit));
+      }),
+    );
+    const rows = await testProvider().listReceipts();
+    expect(rows).toHaveLength(rowsOnServer.length);
+    expect(rows.at(-1)).toMatchObject({ id: rowsOnServer.length });
+    // Pages 1–3 hold the rows; page 4 comes back empty and ends the loop.
+    expect(pagesSeen).toEqual([1, 2, 3, 4]);
+  });
+
+  it("listReceipts keeps paging when the server caps limit below what was asked", async () => {
+    // A short page is NOT the end here: the server silently serves 50 at a time.
+    const serverCap = 50;
+    const rowsOnServer = Array.from({ length: 120 }, (_, i) => ({ id: i + 1 }));
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get("page"));
+        return rok(rowsOnServer.slice((page - 1) * serverCap, page * serverCap));
+      }),
+    );
+    expect(await testProvider().listReceipts()).toHaveLength(120);
+  });
+
+  it("listReceipts fetches one page when the caller drives pagination", async () => {
+    const seen: Array<Record<string, string>> = [];
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        seen.push(Object.fromEntries(new URL(request.url).searchParams));
+        return rok(Array.from({ length: LIST_PAGE_SIZE }, (_, i) => ({ id: i })));
+      }),
+    );
+    const rows = await testProvider().listReceipts({ page: 2 });
+    expect(rows).toHaveLength(LIST_PAGE_SIZE);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.page).toBe("2");
+    expect(seen[0]?.limit).toBeUndefined();
+  });
+
+  it("listReceipts treats an explicit limit as a cap, not a page size", async () => {
+    let calls = 0;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        calls++;
+        const limit = Number(new URL(request.url).searchParams.get("limit"));
+        return rok(Array.from({ length: limit }, (_, i) => ({ id: i })));
+      }),
+    );
+    // A full page back would look like "there may be more" — but the caller
+    // asked for a sample, so it stays a single request.
+    expect(await testProvider().listReceipts({ limit: 5 })).toHaveLength(5);
+    expect(calls).toBe(1);
+  });
+
+  it("listReceipts throws rather than truncate when the pages never run out", async () => {
+    server.use(
+      login(),
+      me(),
+      // Always full: a server ignoring `page` would otherwise loop forever.
+      http.get(rurl(`/c/${CID}/receipts`), () =>
+        rok(Array.from({ length: LIST_PAGE_SIZE }, (_, i) => ({ id: i }))),
+      ),
+    );
+    await expect(testProvider().listReceipts()).rejects.toMatchObject({
+      code: "PROVIDER",
+      message: expect.stringContaining(`${LIST_MAX_PAGES} pages`),
     });
   });
 

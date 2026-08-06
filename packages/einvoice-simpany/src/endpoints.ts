@@ -34,7 +34,12 @@ export const RECEIPT_ENDPOINTS = {
   /**
    * 發票列表. Query `{ status, startDate, endDate, page, limit }` — `status` +
    * `startDate` + `endDate` are ALL required (anything less is a 422);
-   * `status=ALL` works; `yearMonth` is NOT accepted. (verified live)
+   * `status=ALL` works; `yearMonth` is NOT accepted; the window may span at most
+   * 12 months. (verified live)
+   *
+   * ⚠️ The response is a BARE ARRAY with no pagination metadata — no `total`,
+   * no `lastPage`, no `meta` — so a truncated page is indistinguishable from a
+   * complete answer. Page until an empty page comes back.
    */
   list: (c: string | number) => `/c/${c}/receipts`,
   /** 發票明細（by internal id）→ `.data`. */
@@ -50,7 +55,11 @@ export const RECEIPT_ENDPOINTS = {
   /** 作廢「未確認」折讓（DELETE, by draft-allowance id）. Body `{ reason, emails }`. */
   voidDraftAllowance: (c: string | number, draftId: string | number) =>
     `/c/${c}/draft-allowances/${draftId}`,
-  /** 折讓列表. `status` is required too (verified live) — use `status=ALL` + a date range. */
+  /**
+   * 折讓列表. `status` is required too (verified live) — use `status=ALL` + a date
+   * range. Presumed to paginate like the receipt list, metadata-free truncation
+   * included; untested for want of allowance data. No provider method wraps it yet.
+   */
   allowanceList: (c: string | number) => `/c/${c}/allowances`,
   /** 折讓明細（by allowance id）→ `.data`. */
   allowanceDetail: (c: string | number, allowanceId: string | number) =>
