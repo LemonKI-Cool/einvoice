@@ -55,8 +55,27 @@ describe("toIssueItem", () => {
 });
 
 describe("trackUsage", () => {
-  it("uses quantity as the total and counts begin…lastUsed as used", () => {
-    expect(trackUsage({ beginNumber: 0, endNumber: 49, lastUsedNumber: 9, quantity: 50 })).toEqual({
+  it("prefers the API's remainingQuantity (a real masked row, digit-string numbers)", () => {
+    expect(
+      trackUsage({
+        beginNumber: "12345000",
+        endNumber: "12345199",
+        lastUsedNumber: "12345000",
+        remainingQuantity: 199,
+      }),
+    ).toEqual({ total: 200, used: 1, remaining: 199 });
+  });
+
+  it("clamps a negative remainingQuantity", () => {
+    expect(trackUsage({ beginNumber: 0, endNumber: 49, remainingQuantity: -1 })).toEqual({
+      total: 50,
+      used: 50,
+      remaining: 0,
+    });
+  });
+
+  it("falls back to counting begin…lastUsed without remainingQuantity", () => {
+    expect(trackUsage({ beginNumber: 0, endNumber: 49, lastUsedNumber: 9 })).toEqual({
       total: 50,
       used: 10,
       remaining: 40,
@@ -64,20 +83,10 @@ describe("trackUsage", () => {
   });
 
   it("treats an empty lastUsedNumber as nothing issued", () => {
-    expect(trackUsage({ beginNumber: 0, endNumber: 49, lastUsedNumber: "", quantity: 50 })).toEqual(
-      {
-        total: 50,
-        used: 0,
-        remaining: 50,
-      },
-    );
-  });
-
-  it("falls back to endNumber − beginNumber + 1 when quantity is absent", () => {
-    expect(trackUsage({ beginNumber: 10, endNumber: 19 })).toEqual({
-      total: 10,
+    expect(trackUsage({ beginNumber: 0, endNumber: 49, lastUsedNumber: "" })).toEqual({
+      total: 50,
       used: 0,
-      remaining: 10,
+      remaining: 50,
     });
   });
 

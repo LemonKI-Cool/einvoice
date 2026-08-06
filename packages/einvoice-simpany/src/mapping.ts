@@ -91,9 +91,13 @@ export interface TrackNumberUsage {
 }
 
 /**
- * Derive total / used / remaining from a track row's `beginNumber` / `endNumber` /
- * `lastUsedNumber` / `quantity` (field names UNVERIFIED). `total` prefers `quantity`,
- * else `endNumber − beginNumber + 1`; `used` counts `beginNumber … lastUsedNumber`.
+ * Usage of one 字軌 row (field names VERIFIED live — see PR #5; `beginNumber` /
+ * `endNumber` / `lastUsedNumber` arrive as digit strings). `total` is
+ * `endNumber − beginNumber + 1`; `remaining` prefers the API's own authoritative
+ * `remainingQuantity`, with `used = total − remaining`. Only without
+ * `remainingQuantity` does it fall back to counting `beginNumber … lastUsedNumber`
+ * — which may overcount `used` by 1 on a track with no issues yet (whether
+ * `lastUsedNumber` is null then is unconfirmed).
  */
 export function trackUsage(row: Record<string, unknown>): TrackNumberUsage {
   const num = (v: unknown): number | null => {
@@ -104,8 +108,12 @@ export function trackUsage(row: Record<string, unknown>): TrackNumberUsage {
   const begin = num(row.beginNumber);
   const end = num(row.endNumber);
   const last = num(row.lastUsedNumber);
-  const qty = num(row.quantity);
-  const total = qty ?? (begin != null && end != null ? end - begin + 1 : 0);
+  const total = begin != null && end != null ? end - begin + 1 : 0;
+  const remainingApi = num(row.remainingQuantity);
+  if (remainingApi != null) {
+    const remaining = Math.max(0, remainingApi);
+    return { total, used: Math.max(0, total - remaining), remaining };
+  }
   const used = last != null && begin != null ? Math.max(0, last - begin + 1) : 0;
   return { total, used, remaining: Math.max(0, total - used) };
 }
