@@ -133,7 +133,8 @@ nothing — handy for verifying the integration, reconciliation, and pre-issue c
 
 | Method | Endpoint | Purpose | Mutates? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | list issued invoices; the API-required `status`+`startDate`+`endDate` default to `ALL` + a **rolling 13-month window** (below), overridable | read-only |
+| `listReceipts(query?)` | GET `/receipts` | list issued invoices; the API-required `status`+`startDate`+`endDate` default to `ALL` + the **~12 months ending today** (hard 12-month cap, below) | read-only |
+| `simpanyListWindows(from, to)` | (pure function) | split a longer period into windows the API accepts (below) | no request |
 | `canIssue(n?)` | GET (both of the above) | **pre-issue capacity check**: both quota limits at once, naming the bottleneck (below) | read-only |
 | `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=ROC` | **track numbers**: total / used / remaining per range (below; `year` is a **ROC (民國) year**, default current) | read-only |
 | `getSubscriptionStatus()` | GET `/subscription-status` | **plan quota**: `{ status, remainingQuantity }` (below) | read-only |
@@ -168,18 +169,53 @@ if (!cap.ok) {
 
 On a subscription plan the paid quota is often **far smaller** than the remaining
 invoice numbers, so checking only the tracks reads as optimistic.
-⚠️ `trackRemaining` sums **every enabled** track; whether Simpany also enables tracks
-for a future 期別 (not usable today) is unconfirmed, so treat it as an **upper bound**
-and inspect `cap.tracks[].year` / `.month` when that matters.
 
-### The invoice list's default date window
+⚠️ **Counts `ENABLED` tracks only** — not just tidiness. A track's status is
+`ENABLED` / `EXPIRED` (a different enum from a receipt's status), and an **expired
+track keeps its `remainingQuantity`**: a lapsed period was observed still reporting
+all 200 numbers unused. Including them overstates capacity by whole periods.
 
-Without explicit dates, `listReceipts()` queries a **rolling 13 months up to today**
-(Asia/Taipei) rather than the calendar year. That is deliberate: a year-to-date window
-has a blind spot every January — called on 5 January it cannot see December's invoices,
-and a pre-issue duplicate check that reads "nothing found" there issues a second invoice
-for the same order, which once the period has closed can only be undone with an
-allowance. Pass **explicit `startDate` / `endDate`** for a specific period.
+⚠️ `trackRemaining` is still an **upper bound**: the verified account had only the
+current period enabled, but that is one account at one moment and does not rule out
+a future 期別 being enabled early — inspect `cap.tracks[].year` / `.month` when that
+matters.
+
+### The invoice list's date range: a hard 12-month cap
+
+**API limit:** `endDate − startDate` may span at most **12 months** (verified: exactly
+12 months is accepted, one day more is a 422 naming both bounds). The server states the
+rule as `startDate >= endDate − 12 months`. The cap is exported as `LIST_MAX_SPAN_MONTHS`.
+
+**Default:** without dates, `listReceipts()` queries the **~12 months ending at
+`endDate`** (which itself defaults to today in Asia/Taipei) rather than the calendar
+year. A year-to-date window has a blind spot every January — on 5 January it is five
+days wide and cannot see December's invoices, so a pre-issue duplicate check that reads
+"nothing found" issues a second invoice for an order already invoiced, which once the
+period has closed can only be undone with an allowance. The default deliberately stops
+**one day short of the cap** so leap-day month arithmetic cannot push it over.
+
+Supplying one end works too: `{ endDate: "2024-06-30" }` reads the year up to that date,
+not a backwards range starting today.
+
+**A range longer than the cap is rejected before the request** (a `VALIDATION` error
+rather than a wasted 422), including one that only becomes too long once the other end
+is defaulted. To read further back, split it with `simpanyListWindows()` — the endpoint
+cannot express a longer range, so this is the supported way:
+
+```ts
+import { simpanyListWindows } from "@paid-tw/einvoice-simpany";
+
+const rows = [];
+for (const w of simpanyListWindows("2023-01-01", "2026-08-07")) {
+  rows.push(...(await provider.listReceipts(w)));
+}
+```
+
+The windows are contiguous, non-overlapping, and cover the range exactly, and each one
+is guaranteed to pass the API's span check — month arithmetic does not round-trip across
+short months (1 March plus two months less a day is 30 April, yet 30 April minus two
+months overflows to 2 March), so the splitter gives back a day at a time until each
+window is legal.
 
 ### Frequent items
 
@@ -340,7 +376,13 @@ recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
     false`) and `uploadStatus` (MOF upload state) are all in `query()`'s `raw`.
 - ✅ **List** `GET /receipts`: `status` + `startDate` + `endDate` are **all required**
   (anything less is a 422); `status=ALL` and `page` / `limit` work; `yearMonth` is
-  **not accepted**. The **allowances list** requires `status` too.
+  **not accepted**. The **allowances list** requires `status` too. There is also a
+  **12-month cap on the window**: exactly 12 months passes, one day more is a 422
+  naming both bounds (the rule is `startDate >= endDate − 12 months`).
+- ✅ **Track status** is `ENABLED` / `EXPIRED` (a different enum from a receipt's
+  status), and an **expired track keeps its `remainingQuantity`** (a lapsed period was
+  observed still reporting 200 numbers unused) — capacity arithmetic must count
+  `ENABLED` tracks only.
 - ✅ **Tracks** `GET /track-numbers`: requires `year` as a **ROC (民國) year** (e.g. 115);
   a Gregorian year is **not an error — it returns an empty list**;
   `/track-numbers/enabled` takes no `year`. Actual fields: `{ id, year, month, type,

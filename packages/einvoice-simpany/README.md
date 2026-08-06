@@ -120,7 +120,8 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 
 | 方法 | 端點 | 說明 | 異動? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | 發票列表;API 必填的 `status`+`startDate`+`endDate` 預設為 `ALL` + **往回滾動 13 個月**(見下),可覆寫 | 唯讀 |
+| `listReceipts(query?)` | GET `/receipts` | 發票列表;API 必填的 `status`+`startDate`+`endDate` 預設為 `ALL` + **往前約 12 個月**(有 12 個月硬上限,見下) | 唯讀 |
+| `simpanyListWindows(from, to)` | (純函式) | 把長區間切成 API 可接受的多段視窗(見下) | 不發請求 |
 | `canIssue(n?)` | GET(上述兩支) | **開立前額度預檢**:一次檢查訂閱額度與字軌剩餘,回報哪一邊是瓶頸(見下) | 唯讀 |
 | `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=民國年` | **字軌**:每段的總量 / 已開立 / 剩餘(見下;`year` 為**民國年**,預設當年) | 唯讀 |
 | `getSubscriptionStatus()` | GET `/subscription-status` | **訂閱額度**:`{ status, remainingQuantity }`(見下) | 唯讀 |
@@ -151,15 +152,43 @@ if (!cap.ok) {
 ```
 
 訂閱制的方案額度**經常遠小於**字軌剩餘號碼,所以只看字軌會過度樂觀。
-⚠️ `trackRemaining` 加總的是**所有啟用中**字軌;Simpany 是否也會把未來期別的字軌設為啟用
-(那些今天還不能用)尚未確認,所以請把它當成**上限**,必要時自行檢視 `cap.tracks[].year` / `.month`。
 
-### 發票列表的預設時間範圍
+⚠️ **只計入 `ENABLED` 字軌**,這不只是整潔問題:字軌 status 有 `ENABLED` / `EXPIRED` 兩種
+(與發票的 status 是不同列舉),而**過期字軌會保留 `remainingQuantity`**——實測有一段已過期
+的字軌仍回報 200 號全數未用。把它們算進來會高估整整幾個期別的額度。
 
-`listReceipts()` 不傳日期時,預設查 **往回滾動 13 個月至今天**(台北時區),而不是「當年 1/1–12/31」。
-這是刻意的:年度視窗在 1 月會有盲區——1 月 5 日執行時查不到去年 12 月開的發票,而「開立前查有沒有
-重複開過」若讀到空結果就會重複開立;跨期的重複發票只能開折讓收拾,代價很高。
-需要特定期間請**顯式傳 `startDate` / `endDate`**。
+⚠️ `trackRemaining` 仍是**上限**:實測帳號當下只有當期字軌是 `ENABLED`,但這是單一帳號、
+單一時間點的觀察,不足以排除未來期別被提前啟用的可能;必要時自行檢視 `cap.tracks[].year` / `.month`。
+
+### 發票列表的時間範圍:12 個月硬上限
+
+**API 限制**:`endDate − startDate` **最多 12 個月**(實測:整 12 個月可以,多一天就 422,
+且錯誤訊息會同時報 `startDate` 與 `endDate` 兩個邊界)。伺服器的規則是
+`startDate >= endDate − 12 個月`。這個上限以 `LIST_MAX_SPAN_MONTHS` 匯出。
+
+**預設值**:不傳日期時查 **`endDate` 往前約 12 個月**(`endDate` 預設為台北時區的今天),
+而不是「當年 1/1–12/31」。年度視窗在 1 月會有盲區——1 月 5 日執行時只涵蓋 5 天,查不到去年
+12 月開的發票;「開立前查有沒有重複開過」若讀到空結果就會重複開立,而跨期的重複發票只能開折讓
+收拾。預設視窗會**刻意距離上限一天**,避免閏日的月份運算把預設請求推過界。
+
+只傳一邊也可以:`{ endDate: "2024-06-30" }` 會查該日往前一年,而不是從今天往回的倒序區間。
+
+**超過 12 個月的區間會在送出前就被擋下**(丟 `VALIDATION`,不會浪費一次 422),包含
+「只傳 `startDate`、另一邊套預設後才超長」的情況。要讀更久以前的資料,用
+`simpanyListWindows()` 切成多段——API 沒有辦法表達更長的區間,這是唯一做法:
+
+```ts
+import { simpanyListWindows } from "@paid-tw/einvoice-simpany";
+
+const rows = [];
+for (const w of simpanyListWindows("2023-01-01", "2026-08-07")) {
+  rows.push(...(await provider.listReceipts(w)));
+}
+```
+
+切出來的視窗**連續、不重疊、剛好覆蓋**你要的區間,且每一段都保證通過 API 的跨度檢查
+(月份運算在短月份不可逆——`3/1 + 2 個月 − 1 天 = 4/30`,但 `4/30 − 2 個月` 會溢位回 `3/2`——
+切分器會逐日退讓直到合法)。
 
 ### 常用品項(frequent items)
 
@@ -310,6 +339,10 @@ if (canInvalidate) {
     都在 `query()` 回傳的 `raw` 裡。
 - ✅ **列表** `GET /receipts`:`status` + `startDate` + `endDate` **三者必填**(缺一即 422);
   `status=ALL` 與 `page` / `limit` 可用;`yearMonth` **不被接受**。**折讓列表**同樣必填 `status`。
+  另有**跨度上限 12 個月**:整 12 個月可以,多一天回 422 並同時報出兩個邊界
+  (規則為 `startDate >= endDate − 12 個月`)。
+- ✅ **字軌 status** 為 `ENABLED` / `EXPIRED`(與發票 status 不同列舉);**過期字軌保留
+  `remainingQuantity`**(實測有一段過期字軌仍回報 200 號未用),所以額度計算必須只算 `ENABLED`。
 - ✅ **字軌** `GET /track-numbers`:必填 `year` 且為**民國年**(如 115);傳西元年**不會報錯、
   只回空陣列**;`/track-numbers/enabled` 不需 `year`。實際欄位:`{ id, year, month, type,
   track, beginNumber, endNumber, lastUsedNumber, remainingQuantity, status, can* }`
