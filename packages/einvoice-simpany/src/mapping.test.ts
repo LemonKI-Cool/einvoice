@@ -82,6 +82,18 @@ describe("trackUsage", () => {
     });
   });
 
+  it("counts an untouched track as nothing issued (lastUsedNumber is null, verified live)", () => {
+    expect(
+      trackUsage({ beginNumber: "67890000", endNumber: "67890199", lastUsedNumber: null }),
+    ).toEqual({ total: 200, used: 0, remaining: 200 });
+  });
+
+  it("counts a track whose lastUsedNumber equals beginNumber as one issued", () => {
+    expect(
+      trackUsage({ beginNumber: "12345000", endNumber: "12345199", lastUsedNumber: "12345000" }),
+    ).toEqual({ total: 200, used: 1, remaining: 199 });
+  });
+
   it("treats an empty lastUsedNumber as nothing issued", () => {
     expect(trackUsage({ beginNumber: 0, endNumber: 49, lastUsedNumber: "" })).toEqual({
       total: 50,

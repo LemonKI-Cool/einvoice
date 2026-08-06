@@ -96,8 +96,8 @@ export interface TrackNumberUsage {
  * `endNumber − beginNumber + 1`; `remaining` prefers the API's own authoritative
  * `remainingQuantity`, with `used = total − remaining`. Only without
  * `remainingQuantity` does it fall back to counting `beginNumber … lastUsedNumber`
- * — which may overcount `used` by 1 on a track with no issues yet (whether
- * `lastUsedNumber` is null then is unconfirmed).
+ * — which is exact: an untouched track reports `lastUsedNumber: null` (not
+ * `beginNumber`), so the fallback yields `used: 0` rather than overcounting by 1.
  */
 export function trackUsage(row: Record<string, unknown>): TrackNumberUsage {
   const num = (v: unknown): number | null => {
