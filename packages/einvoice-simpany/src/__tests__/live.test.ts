@@ -1,10 +1,12 @@
+import { isInvoiceError } from "@paid-tw/einvoice";
 import { describe, expect, it } from "vitest";
 import { createSimpanyProvider } from "../provider.js";
 
 /**
  * Live test against the Simpany production API. Skipped unless SIMPANY_LIVE=1 and
- * the credentials are present. This only exercises the IMPLEMENTED auth layer
- * (login + /me + company resolution) — the five operations are not wired yet.
+ * the credentials are present. All five operations are implemented, but this
+ * suite only exercises the read-only auth layer (login + /me + company
+ * resolution) — the write paths would issue real invoices.
  *
  *   SIMPANY_LIVE=1 SIMPANY_ACCOUNT=… SIMPANY_PASSWORD=… \
  *   pnpm exec vitest run simpany/src/__tests__/live
@@ -43,10 +45,20 @@ describe.skipIf(!live)("Simpany live (production) — auth layer", LIVE_OPTS, ()
     );
   });
 
-  it("resolves a company id", async () => {
-    const id = await p.resolveCompanyId().catch((e: unknown) => e);
-    // Either resolves to the sole company, or throws a clear "ambiguous" error
-    // when the account has several — both are acceptable here.
-    expect(id).toBeDefined();
+  it("resolves a company id, or reports the documented ambiguity", async () => {
+    try {
+      // A sole company must resolve to its id.
+      const id = await p.resolveCompanyId();
+      expect(["string", "number"]).toContain(typeof id);
+    } catch (e) {
+      // Several companies without config.companyId/companyUbn must surface as
+      // the specific VALIDATION "ambiguous company" error — anything else
+      // (auth, network) is a real regression and fails here.
+      expect(isInvoiceError(e)).toBe(true);
+      expect(e).toMatchObject({
+        code: "VALIDATION",
+        message: expect.stringContaining("companies"),
+      });
+    }
   });
 });
