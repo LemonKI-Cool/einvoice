@@ -210,15 +210,10 @@ describe("void", () => {
     expect(res.status).toBe("VOIDED");
   });
 
-  it("looks up the receiptId by invoice number when not supplied", async () => {
-    server.use(
-      login(),
-      me(),
-      http.get(rurl(`/c/${CID}/receipts`), () => rok([{ id: 555, invoiceNumber: "AB99" }])),
-      http.delete(rurl(`/c/${CID}/receipts/555`), () => rok({ id: 555 })),
+  it("throws VALIDATION without providerOptions.receiptId (no invoice-number lookup)", async () => {
+    await expect(testProvider().void({ invoiceNumber: "AB99", reason: "x" })).rejects.toMatchObject(
+      { code: "VALIDATION", message: expect.stringContaining("receiptId") },
     );
-    const res = await testProvider().void({ invoiceNumber: "AB99", reason: "x" });
-    expect(res.invoiceNumber).toBe("AB99");
   });
 });
 
@@ -370,38 +365,11 @@ describe("query", () => {
     });
   });
 
-  it("throws NOT_FOUND when the invoice-number lookup finds nothing", async () => {
-    server.use(
-      login(),
-      me(),
-      http.get(rurl(`/c/${CID}/receipts`), () => rok([])),
-    );
+  it("throws VALIDATION without providerOptions.receiptId (no invoice-number lookup)", async () => {
     await expect(testProvider().query({ invoiceNumber: "NOPE" })).rejects.toMatchObject({
-      code: "NOT_FOUND",
+      code: "VALIDATION",
+      message: expect.stringContaining("receiptId"),
     });
-  });
-
-  it("resolves the receiptId from a { list: [...] } lookup response", async () => {
-    server.use(
-      login(),
-      me(),
-      // A list body that is NOT unwrapped to a bare array (no top-level `data`).
-      http.get(rurl(`/c/${CID}/receipts`), () =>
-        HttpResponse.json({ list: [{ id: 771, invoiceNumber: "AB77" }] }),
-      ),
-      http.get(rurl(`/c/${CID}/receipts/771`), () =>
-        rok({
-          id: 771,
-          invoiceNumber: "AB77",
-          status: "ISSUED",
-          totalAmount: 0,
-          taxAmount: 0,
-          items: [],
-        }),
-      ),
-    );
-    const res = await testProvider().query({ invoiceNumber: "AB77" });
-    expect(res.invoiceNumber).toBe("AB77");
   });
 });
 
@@ -533,7 +501,7 @@ describe("notifyReceipt / printReceipt", () => {
         return rok({ ok: true });
       }),
     );
-    await testProvider().notifyReceipt("AB12345678", ["fixed@example.com"], { receiptId: 900 });
+    await testProvider().notifyReceipt(900, ["fixed@example.com"]);
     expect(body).toEqual({ emails: ["fixed@example.com"] });
   });
 
@@ -543,10 +511,7 @@ describe("notifyReceipt / printReceipt", () => {
       me(),
       http.post(rurl(`/c/${CID}/receipts/900/print`), () => rpdf([0x25, 0x50, 0x44, 0x46])),
     );
-    const res = await testProvider().printReceipt("AB12345678", {
-      receiptId: 900,
-      format: "FORMAT_A4",
-    });
+    const res = await testProvider().printReceipt(900, { format: "FORMAT_A4" });
     expect(res.contentType).toContain("application/pdf");
     expect(Array.from(res.data)).toEqual([0x25, 0x50, 0x44, 0x46]); // %PDF
   });

@@ -72,7 +72,11 @@ const currentRocYear = () => Number(taipeiDateTime(new Date()).slice(0, 4)) - 19
 
 /** provider-specific fields callers may pass via `input.providerOptions`. */
 interface SimpanyProviderOptions {
-  /** Simpany's INTERNAL receipt id (from an issue result's `raw.id`) — skips the lookup. */
+  /**
+   * Simpany's INTERNAL receipt id (an issue result's `raw.id`, or a
+   * {@link SimpanyProvider.listReceipts} row id) — REQUIRED by void / query /
+   * allowance. There is no invoice-number lookup (see {@link SimpanyProvider}).
+   */
   receiptId?: string | number;
   /** Simpany's INTERNAL allowance (or draft-allowance) id — required by voidAllowance. */
   allowanceId?: string | number;
@@ -102,7 +106,10 @@ interface SimpanyProviderOptions {
  * Operations run on the receipt host (`member2.simpany.co`) and are scoped to a
  * company id (from config or resolved via `/me`). void / query / allowance key
  * off Simpany's INTERNAL receipt id — pass an issue result's `raw.id` back via
- * `providerOptions.receiptId` to skip the (best-effort) invoice-number lookup.
+ * `providerOptions.receiptId` (REQUIRED). There is no invoice-number reverse
+ * lookup: the list endpoint's filters are all required (see
+ * {@link SimpanyProvider.listReceipts}) and its `keyword` param is unverified,
+ * so the old best-effort lookup could never succeed (PR #5).
  */
 export class SimpanyProvider implements InvoiceProvider {
   readonly name = "simpany";
@@ -188,8 +195,8 @@ export class SimpanyProvider implements InvoiceProvider {
   async void(input: VoidInvoiceInput): Promise<VoidInvoiceResult> {
     parseInput(voidInvoiceInputSchema, input, "simpany");
     const opts = (input.providerOptions ?? {}) as SimpanyProviderOptions;
+    const receiptId = requireReceiptId("void", opts);
     const cid = await this.resolveCompanyId();
-    const receiptId = await this.resolveReceiptId(input.invoiceNumber, opts);
     const r = await this.client.receipt("DELETE", RECEIPT_ENDPOINTS.void(cid, receiptId), {
       reason: input.reason,
       emails: opts.emails ?? [],
@@ -207,8 +214,8 @@ export class SimpanyProvider implements InvoiceProvider {
   async allowance(input: AllowanceInput): Promise<AllowanceResult> {
     parseInput(allowanceInputSchema, input, "simpany");
     const opts = (input.providerOptions ?? {}) as SimpanyProviderOptions;
+    const receiptId = requireReceiptId("allowance", opts);
     const cid = await this.resolveCompanyId();
-    const receiptId = await this.resolveReceiptId(input.invoiceNumber, opts);
 
     let items = opts.items;
     if (!items) {
@@ -270,8 +277,8 @@ export class SimpanyProvider implements InvoiceProvider {
   async query(input: QueryInvoiceInput): Promise<QueryInvoiceResult> {
     parseInput(queryInvoiceInputSchema, input, "simpany");
     const opts = (input.providerOptions ?? {}) as SimpanyProviderOptions;
+    const receiptId = requireReceiptId("query", opts);
     const cid = await this.resolveCompanyId();
-    const receiptId = await this.resolveReceiptId(input.invoiceNumber, opts);
     const r = await this.client.receipt<Record<string, unknown>>(
       "GET",
       RECEIPT_ENDPOINTS.detail(cid, receiptId),
@@ -426,30 +433,25 @@ export class SimpanyProvider implements InvoiceProvider {
   /**
    * 補寄 / 寄送發票通知信 — POST /c/{cid}/receipts/{id}/notifications `{ emails }`.
    * The rescue path when a consumer gave a wrong email at checkout: re-send the
-   * invoice to a corrected address. Pass `providerOptions.receiptId` (from an
-   * issue result's `raw.id`) to skip the invoice-number lookup.
+   * invoice to a corrected address. Keyed by Simpany's internal receipt id (an
+   * issue result's `raw.id`).
    */
-  async notifyReceipt(
-    invoiceNumber: string,
-    emails: string[],
-    opts: { receiptId?: string | number } = {},
-  ): Promise<void> {
+  async notifyReceipt(receiptId: string | number, emails: string[]): Promise<void> {
     const cid = await this.resolveCompanyId();
-    const receiptId = await this.resolveReceiptId(invoiceNumber, { receiptId: opts.receiptId });
     await this.client.receipt("POST", RECEIPT_ENDPOINTS.notify(cid, receiptId), { emails });
   }
 
   /**
-   * 下載發票證明聯 PDF — POST /c/{cid}/receipts/{id}/print. Returns the raw PDF
-   * bytes + content type. `format` (e.g. `"FORMAT_A4"`) and `reprint` are passed
-   * through; `reprint` marks it as a 補印本.
+   * 下載發票證明聯 PDF — POST /c/{cid}/receipts/{id}/print. Keyed by Simpany's
+   * internal receipt id (an issue result's `raw.id`). Returns the raw PDF bytes +
+   * content type. `format` (e.g. `"FORMAT_A4"`) and `reprint` are passed through;
+   * `reprint` marks it as a 補印本.
    */
   async printReceipt(
-    invoiceNumber: string,
-    opts: { receiptId?: string | number; format?: string; reprint?: boolean } = {},
+    receiptId: string | number,
+    opts: { format?: string; reprint?: boolean } = {},
   ): Promise<{ contentType: string; data: Uint8Array }> {
     const cid = await this.resolveCompanyId();
-    const receiptId = await this.resolveReceiptId(invoiceNumber, { receiptId: opts.receiptId });
     return this.client.receiptFile("POST", RECEIPT_ENDPOINTS.print(cid, receiptId), {
       ...(opts.format ? { format: opts.format } : {}),
       ...(opts.reprint != null ? { isReprint: opts.reprint } : {}),
@@ -517,33 +519,21 @@ export class SimpanyProvider implements InvoiceProvider {
       zeroTaxRateReasonCode: isZeroRate ? (opts.zeroTaxRateReasonCode ?? null) : null,
     };
   }
+}
 
-  /**
-   * Resolve Simpany's internal receipt id: `providerOptions.receiptId` if given,
-   * else a best-effort lookup by invoice number via the list `keyword` filter
-   * (UNVERIFIED — the exact query param isn't confirmed; prefer passing receiptId).
-   */
-  private async resolveReceiptId(
-    invoiceNumber: string | undefined,
-    opts: SimpanyProviderOptions,
-  ): Promise<string | number> {
-    if (opts.receiptId != null) return opts.receiptId;
-    if (!invoiceNumber) {
-      throw fail("either invoiceNumber or providerOptions.receiptId is required");
-    }
-    const cid = await this.resolveCompanyId();
-    const path = `${RECEIPT_ENDPOINTS.list(cid)}?keyword=${encodeURIComponent(invoiceNumber)}&limit=25`;
-    const res = await this.client.receipt<unknown>("GET", path);
-    const found = toArray(res).find((x) => String(x.invoiceNumber) === invoiceNumber)?.id;
-    if (found == null) {
-      throw new InvoiceError(`Simpany receipt ${invoiceNumber} not found`, {
-        provider: "simpany",
-        code: InvoiceErrorCode.NOT_FOUND,
-        rawMessage: "receipt not found",
-      });
-    }
-    return found as string | number;
-  }
+/**
+ * Simpany's internal receipt id — REQUIRED via `providerOptions.receiptId` (an
+ * issue result's `raw.id`, or a {@link SimpanyProvider.listReceipts} row id).
+ * The old best-effort invoice-number lookup was removed: the list endpoint
+ * requires `status` + `startDate` + `endDate` (verified live — the lookup's
+ * request could only ever 422) and its `keyword` filter is unverified (PR #5).
+ */
+function requireReceiptId(op: string, opts: SimpanyProviderOptions): string | number {
+  if (opts.receiptId != null) return opts.receiptId;
+  throw fail(
+    `Simpany ${op} requires providerOptions.receiptId — Simpany keys off its internal ` +
+      `receipt id (an issue result's raw.id or a listReceipts() row id), not the invoice number`,
+  );
 }
 
 /** Create a Simpany {@link InvoiceProvider}. */
