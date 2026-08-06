@@ -25,7 +25,7 @@ export {
   AUTH_ENDPOINTS as SIMPANY_AUTH_ENDPOINTS,
   RECEIPT_ENDPOINTS as SIMPANY_RECEIPT_ENDPOINTS,
 } from "./endpoints.js";
-export { SimpanyClient, mapSimpanyError } from "./client.js";
+export { isThrottled, mapSimpanyError, retryAfterSeconds, SimpanyClient } from "./client.js";
 export type {
   SimpanyEnvelope,
   SimpanyLoginData,

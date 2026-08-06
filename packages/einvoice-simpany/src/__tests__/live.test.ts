@@ -8,11 +8,18 @@ import { createSimpanyProvider } from "../provider.js";
  *
  *   SIMPANY_LIVE=1 SIMPANY_ACCOUNT=… SIMPANY_PASSWORD=… \
  *   pnpm exec vitest run simpany/src/__tests__/live
+ *
+ * ⚠️ Every test below MUST share the single `p` created in the describe block.
+ * `POST /v1/login` is throttled at ~6 requests/minute, and each new provider
+ * logs in again — building one per test trips the throttle and turns the whole
+ * file red with rate-limit errors that look nothing like the assertions being
+ * made. `retry` is deliberately not set here for the same reason: retrying a
+ * throttled call just burns the next minute's budget.
  */
 const env = process.env;
 const live = env.SIMPANY_LIVE === "1" && Boolean(env.SIMPANY_ACCOUNT && env.SIMPANY_PASSWORD);
 
-const LIVE_OPTS = { retry: 2 } as const;
+const LIVE_OPTS = { timeout: 30_000 } as const;
 
 const provider = () =>
   createSimpanyProvider({
