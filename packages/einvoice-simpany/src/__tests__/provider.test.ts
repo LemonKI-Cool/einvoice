@@ -8,6 +8,7 @@ import {
   supports,
   taipeiDateTime,
 } from "@paid-tw/einvoice";
+import { defaultListWindow, exceedsMonthSpan } from "../dates.js";
 import { okLogin, okMe, rerror, rok, rpdf, rurl, server, testProvider, url } from "./server.js";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -418,16 +419,11 @@ describe("read-only helpers", () => {
     expect(seen?.searchParams.get("status")).toBe("ALL");
     expect(seen?.searchParams.get("limit")).toBe("5");
 
-    // The default window rolls back 13 months from today rather than covering
-    // the calendar year, so it never blanks out last December on 5 January.
-    const today = taipeiDateTime(new Date()).slice(0, 10);
-    const start = seen?.searchParams.get("startDate") ?? "";
-    expect(seen?.searchParams.get("endDate")).toBe(today);
-    expect(start).toMatch(/^\d{4}-\d{2}-01$/);
-    const monthsBack =
-      (Number(today.slice(0, 4)) - Number(start.slice(0, 4))) * 12 +
-      (Number(today.slice(5, 7)) - Number(start.slice(5, 7)));
-    expect(monthsBack).toBe(13);
+    // The default is the rolling window, and above all one the API accepts.
+    const expected = defaultListWindow();
+    expect(seen?.searchParams.get("startDate")).toBe(expected.startDate);
+    expect(seen?.searchParams.get("endDate")).toBe(expected.endDate);
+    expect(exceedsMonthSpan(expected.startDate, expected.endDate)).toBe(false);
   });
 
   it("listReceipts still covers last December when called in early January", async () => {
@@ -447,8 +443,53 @@ describe("read-only helpers", () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(seen?.searchParams.get("startDate")).toBe("2024-12-01");
+    expect(seen?.searchParams.get("startDate")).toBe("2025-01-06");
     expect(seen?.searchParams.get("endDate")).toBe("2026-01-05");
+  });
+
+  it("listReceipts anchors the default window to a caller-supplied endDate", async () => {
+    let seen: URL | undefined;
+    server.use(
+      login(),
+      me(),
+      http.get(rurl(`/c/${CID}/receipts`), ({ request }) => {
+        seen = new URL(request.url);
+        return rok([]);
+      }),
+    );
+    await testProvider().listReceipts({ endDate: "2024-06-30" });
+    expect(seen?.searchParams.get("startDate")).toBe("2023-07-01");
+    expect(seen?.searchParams.get("endDate")).toBe("2024-06-30");
+  });
+
+  it("listReceipts rejects a window longer than the API's limit before requesting", async () => {
+    // No MSW handler: reaching the network at all would fail the test.
+    server.use(login(), me());
+    await expect(
+      testProvider().listReceipts({ startDate: "2020-01-01", endDate: "2026-08-07" }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION",
+      message: expect.stringContaining("simpanyListWindows"),
+    });
+  });
+
+  it("listReceipts catches a too-long window formed by defaulting the other end", async () => {
+    server.use(login(), me());
+    await expect(testProvider().listReceipts({ startDate: "2015-01-01" })).rejects.toMatchObject({
+      code: "VALIDATION",
+      message: expect.stringContaining("12-month"),
+    });
+  });
+
+  it("listReceipts rejects a reversed or malformed range", async () => {
+    server.use(login(), me());
+    await expect(
+      testProvider().listReceipts({ startDate: "2026-08-07", endDate: "2026-01-01" }),
+    ).rejects.toMatchObject({ code: "VALIDATION", message: expect.stringContaining("is after") });
+    await expect(testProvider().listReceipts({ endDate: "2026/08/07" })).rejects.toMatchObject({
+      code: "VALIDATION",
+      message: expect.stringContaining("YYYY-MM-DD"),
+    });
   });
 
   it("listReceipts lets callers override the defaulted params", async () => {

@@ -11,7 +11,6 @@ import {
   parseInput,
   parseTaipeiDate,
   queryInvoiceInputSchema,
-  taipeiDateTime,
   voidAllowanceInputSchema,
   voidInvoiceInputSchema,
   type AllowanceInput,
@@ -28,6 +27,15 @@ import {
 } from "@paid-tw/einvoice";
 import { SimpanyClient, type SimpanyCompany, type SimpanyMe } from "./client.js";
 import { type SimpanyConfig } from "./config.js";
+import {
+  LIST_MAX_SPAN_MONTHS,
+  assertIsoDate,
+  currentRocYear,
+  defaultListWindow,
+  exceedsMonthSpan,
+  simpanyListWindows,
+  taipeiToday,
+} from "./dates.js";
 import { RECEIPT_ENDPOINTS } from "./endpoints.js";
 import {
   buyerEmails,
@@ -85,31 +93,24 @@ function toArray(res: unknown): Array<Record<string, unknown>> {
 const fail = (message: string, code = InvoiceErrorCode.VALIDATION) =>
   new InvoiceError(message, { provider: "simpany", code, rawMessage: message });
 
-/** Today in Asia/Taipei as `YYYY-MM-DD`. */
-const taipeiToday = () => taipeiDateTime(new Date()).slice(0, 10);
-
-/** The current year in Asia/Taipei as a ROC (民國) year — e.g. 2026 → 115. */
-const currentRocYear = () => Number(taipeiToday().slice(0, 4)) - 1911;
-
-/**
- * The first day of the month `months` months before the current Taipei month,
- * as `YYYY-MM-DD`. Anchored to the 1st so no day-clamping can shorten the
- * window (13 months before 31 March is 28 February, not 3 March).
- */
-function taipeiMonthStartBefore(months: number): string {
-  const [y, m] = taipeiToday().split("-").map(Number);
-  const d = new Date(Date.UTC(y as number, (m as number) - 1 - months, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+/** Query params for {@link SimpanyProvider.listReceipts}. */
+export interface SimpanyListReceiptsQuery {
+  /** 發票狀態 — `"ALL"` (the default) or a Simpany status such as `"ISSUED"`. Required by the API. */
+  status?: string;
+  /**
+   * Window start, `YYYY-MM-DD` (Asia/Taipei). Required by the API; defaults with
+   * `endDate` to {@link defaultListWindow}. `endDate` minus `startDate` may not
+   * exceed {@link LIST_MAX_SPAN_MONTHS} months — pass a longer range through
+   * {@link simpanyListWindows} instead.
+   */
+  startDate?: string;
+  /** Window end, `YYYY-MM-DD` (Asia/Taipei). Required by the API; defaults to today. */
+  endDate?: string;
+  page?: number;
+  limit?: number;
+  /** Any other param Simpany accepts, forwarded verbatim. */
+  [key: string]: string | number | undefined;
 }
-
-/**
- * How far back {@link SimpanyProvider.listReceipts} looks by default. A rolling
- * window rather than the calendar year: on 5 January a year-to-date default
- * would silently hide December's invoices, and a duplicate check that reads
- * "nothing found" there issues a second invoice for the same order — expensive,
- * since a cross-period duplicate can only be undone with an allowance.
- */
-const LIST_WINDOW_MONTHS = 13;
 
 /** provider-specific fields callers may pass via `input.providerOptions`. */
 interface SimpanyProviderOptions {
@@ -407,28 +408,32 @@ export class SimpanyProvider implements InvoiceProvider {
   // they exercise auth + company scope + a real receipt-host GET.
 
   /**
-   * 發票列表 — list issued invoices (raw rows). The API REQUIRES `status` +
-   * `startDate` + `endDate`, all three (verified live: anything less is a 422,
-   * and `yearMonth` is not accepted) — they default to `status=ALL` over a
-   * rolling {@link LIST_WINDOW_MONTHS}-month window ending today, NOT the
-   * calendar year, so the result never has a blind spot at the year boundary.
-   * Override via `{ status, startDate, endDate, page, limit }`; pass explicit
-   * dates whenever you need a specific period rather than "recently". Read-only.
+   * 發票列表 — list issued invoices (raw rows). Read-only.
+   *
+   * The API REQUIRES `status` + `startDate` + `endDate`, all three (verified
+   * live: anything less is a 422, and `yearMonth` is not accepted). They default
+   * to `status=ALL` over {@link defaultListWindow} — the ~12 months ending
+   * today, NOT the calendar year, which would be only a few days wide every
+   * January.
+   *
+   * The window may not exceed {@link LIST_MAX_SPAN_MONTHS} months; a longer one
+   * is rejected here with `VALIDATION` rather than left to come back as the
+   * API's 422. To read further back, loop over {@link simpanyListWindows}.
    */
   async listReceipts(
-    query: Record<string, string | number> = {},
+    query: SimpanyListReceiptsQuery = {},
   ): Promise<Array<Record<string, unknown>>> {
+    const { status, startDate, endDate, ...rest } = query;
+    const window = resolveListWindow(startDate, endDate);
     const cid = await this.resolveCompanyId();
-    const params = {
-      status: "ALL",
-      startDate: taipeiMonthStartBefore(LIST_WINDOW_MONTHS),
-      endDate: taipeiToday(),
-      ...query,
-    };
-    const qs = new URLSearchParams(
-      Object.entries(params).map(([k, v]): [string, string] => [k, String(v)]),
-    ).toString();
-    const res = await this.client.receipt<unknown>("GET", `${RECEIPT_ENDPOINTS.list(cid)}?${qs}`);
+    const qs = new URLSearchParams({ status: status ?? "ALL", ...window });
+    for (const [k, v] of Object.entries(rest)) {
+      if (v !== undefined) qs.set(k, String(v));
+    }
+    const res = await this.client.receipt<unknown>(
+      "GET",
+      `${RECEIPT_ENDPOINTS.list(cid)}?${qs.toString()}`,
+    );
     return toArray(res);
   }
 
@@ -602,6 +607,35 @@ export class SimpanyProvider implements InvoiceProvider {
       zeroTaxRateReasonCode: isZeroRate ? (opts.zeroTaxRateReasonCode ?? null) : null,
     };
   }
+}
+
+/**
+ * Settle the receipt list's date window and reject anything the API would 422.
+ *
+ * `endDate` defaults to today and `startDate` to twelve months before whichever
+ * `endDate` is in play, so supplying just one end still yields a sane window —
+ * `{ endDate: "2024-06-30" }` reads the year up to that date, not a backwards
+ * range starting today.
+ */
+function resolveListWindow(
+  startDate?: string,
+  endDate?: string,
+): { startDate: string; endDate: string } {
+  const end = endDate ?? taipeiToday();
+  assertIsoDate(end, "endDate");
+  const start = startDate ?? defaultListWindow(end).startDate;
+  assertIsoDate(start, "startDate");
+  if (start > end) {
+    throw fail(`Simpany listReceipts: startDate ${start} is after endDate ${end}`);
+  }
+  if (exceedsMonthSpan(start, end)) {
+    throw fail(
+      `Simpany listReceipts: ${start} … ${end} is longer than the API's ` +
+        `${LIST_MAX_SPAN_MONTHS}-month window limit (the API answers a longer one with a 422). ` +
+        `Read further back by looping over simpanyListWindows("${start}", "${end}").`,
+    );
+  }
+  return { startDate: start, endDate: end };
 }
 
 /**
