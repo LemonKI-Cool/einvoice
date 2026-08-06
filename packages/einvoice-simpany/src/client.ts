@@ -52,6 +52,10 @@ export type SimpanyHost = "auth" | "receipt";
 /**
  * Map an HTTP status (and optional envelope code) to a unified
  * {@link InvoiceErrorCode}. Simpany largely follows HTTP semantics.
+ *
+ * 429 lands on PROVIDER because the unified enum has no rate-limit member; the
+ * throttle is instead made legible through the error message and the
+ * `Retry-After` seconds carried on `raw` — see {@link isThrottled}.
  */
 export function mapSimpanyError(httpStatus: number, code?: number): InvoiceErrorCode {
   const s = httpStatus || code || 0;
@@ -62,6 +66,55 @@ export function mapSimpanyError(httpStatus: number, code?: number): InvoiceError
   if (s === 429) return InvoiceErrorCode.PROVIDER;
   if (s >= 500) return InvoiceErrorCode.PROVIDER;
   return InvoiceErrorCode.UNKNOWN;
+}
+
+/**
+ * `POST /v1/login` is throttled — observed at **6 requests per minute**
+ * (`X-RateLimit-Limit: 6`), and the 429 reply is an HTML error page, not the
+ * usual JSON envelope.
+ *
+ * That combination is a trap worth naming: without this check the HTML body
+ * fails `JSON.parse` first, and the throttle surfaces as "Simpany returned a
+ * non-JSON response" — which reads like a broken endpoint rather than
+ * back-pressure. It is easy to hit by accident, because every new
+ * `SimpanyClient` logs in again: a handful of short-lived clients (a test file
+ * that builds one per case, a request handler that constructs one per request)
+ * is enough. Share one client — the JWT is good for 30 days.
+ */
+export function isThrottled(status: number): boolean {
+  return status === 429;
+}
+
+/**
+ * `Retry-After` in whole seconds, when the server sent a valid delta-seconds
+ * value (a non-negative integer, per RFC 9110). The HTTP-date form and any
+ * malformed value yield `undefined`.
+ */
+export function retryAfterSeconds(headers: Headers): number | undefined {
+  const value = headers.get("retry-after");
+  if (!value) return undefined;
+  const seconds = Number(value);
+  return Number.isInteger(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
+/** Build the throttle error, naming the wait so callers can back off. */
+function throttleError(res: Response, path: string): InvoiceError {
+  const retryAfter = retryAfterSeconds(res.headers);
+  const limit = res.headers.get("x-ratelimit-limit");
+  const wait = retryAfter === undefined ? "" : ` Retry after ${retryAfter}s.`;
+  const cap = limit ? ` (limit ${limit}/min)` : "";
+  // The client-reuse advice only makes sense when login itself was throttled.
+  const advice =
+    path === AUTH_ENDPOINTS.login
+      ? " Reuse one SimpanyClient — each new client logs in again, and login is the throttled endpoint."
+      : " Back off before retrying.";
+  return new InvoiceError(`Simpany rate limit hit on ${path}${cap}.${wait}${advice}`, {
+    provider: "simpany",
+    code: mapSimpanyError(res.status),
+    rawCode: String(res.status),
+    rawMessage: `HTTP 429${cap}`,
+    raw: { status: 429, retryAfterSeconds: retryAfter, limit },
+  });
 }
 
 /**
@@ -196,6 +249,11 @@ export class SimpanyClient {
 
     // Some endpoints (204 No Content, binary) carry no JSON body.
     const raw = await res.text();
+
+    // Check the throttle BEFORE parsing: a 429 body is HTML, so parsing first
+    // would report it as a non-JSON response and hide the real cause.
+    if (isThrottled(res.status)) throw throttleError(res, path);
+
     let env: SimpanyEnvelope<T> = {};
     if (raw) {
       try {
@@ -290,6 +348,10 @@ export class SimpanyClient {
         cause,
       });
     }
+
+    // Same trap as `transport`: a throttled reply is an HTML page, so it has to
+    // be recognised before anything tries to read it as an error envelope.
+    if (isThrottled(res.status)) throw throttleError(res, path);
 
     const ct = res.headers.get("content-type") ?? "";
     // A JSON body (or a non-2xx) is an error envelope, not a file.

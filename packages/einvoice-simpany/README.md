@@ -54,6 +54,13 @@ sequenceDiagram
 - **可直接注入 token**:設定 `token` 即可略過帳密登入(例如從 vault 取),此時可不帶
   `account` / `password`。
 - 登入**無 captcha / CSRF / MFA**;帳密僅經 TLS 傳給 `/login`。
+- ⚠️ **`/login` 有限流:實測約每分鐘 6 次**(回應帶 `X-RateLimit-Limit: 6`、`Retry-After` 秒數)。
+  請**共用同一個 client 實例** — 每 new 一個 client 就會重新登入一次,所以「每個測試建一個」或
+  「每個 request 建一個」很容易觸頂。token 效期有 30 天,重用完全足夠。
+  超過時會 throw 一個訊息明確標示限流與等待秒數的 `InvoiceError`(`code: PROVIDER`,
+  `raw.retryAfterSeconds`);另可用匯出的 `isThrottled(status)` / `retryAfterSeconds(headers)` 自行判斷。
+  註:**429 的 body 是 HTML 而非 JSON envelope**,client 會在解析前先攔截 —— 否則會誤報成
+  「非 JSON 回應」,看起來像端點壞掉而不是被限流。
 - ⚠️ **安全**:token 等同一組效期 30 天的長期憑證——請只放在伺服器端,勿寫入前端或版控;
   帳密與 token 都應以環境變數 / secret 管理。追蹤日誌**不會記錄 request/response body**(見「錯誤處理與除錯」)。
 
@@ -335,6 +342,9 @@ if (canInvalidate) {
 - **對應規則**:HTTP `401`/`403`→`AUTH`、`404`→`NOT_FOUND`、`409`→`CONFLICT`、`400`/`422`→`VALIDATION`、
   `429` 與 `5xx`→`PROVIDER`;傳輸失敗→`NETWORK`。member2 的兩種錯誤格式(框架式 `{message}` / `{errors}`、
   業務式 `{status:"error",error:{title}}`)都已正規化。
+- **限流(429)**:unified 的 `InvoiceErrorCode` 沒有 rate-limit 成員,故仍歸在 `PROVIDER`;
+  但訊息會明講「rate limit / limit N/min / Retry after Ns / Reuse one SimpanyClient」,
+  且 `raw` 帶 `{ status: 429, retryAfterSeconds, limit }` 供退避使用(見「身份驗證」)。
 - **除錯 / 追蹤**:設定 `debug` 回呼可收到每個 HTTP 呼叫的 metadata(`provider` / `method` / `url` /
   `status` / `durationMs` / `error`);**不會記錄 request / response body**(可能含個資或加密內容)。
   需要看 body 時,請自行包一層 `fetch` 由 `config.fetch` 傳入。

@@ -61,6 +61,15 @@ sequenceDiagram
 - **Inject a token directly:** set `token` to skip the credential login (e.g. from a vault);
   `account` / `password` are then optional.
 - Login has **no captcha / CSRF / MFA**; credentials go to `/login` over TLS only.
+- ⚠️ **`/login` is throttled — measured at about 6 requests per minute** (the reply carries
+  `X-RateLimit-Limit: 6` and a `Retry-After` in seconds). **Share one client instance**: every new
+  client logs in again, so "one per test" or "one per request" trips the throttle easily. The token
+  is good for 30 days, so reuse costs nothing. Exceeding it throws an `InvoiceError` whose message
+  names the limit and the wait (`code: PROVIDER`, `raw.retryAfterSeconds`); `isThrottled(status)` and
+  `retryAfterSeconds(headers)` are exported if you want to branch yourself.
+  Note the **429 body is HTML, not the JSON envelope** — the client detects it before parsing,
+  because otherwise the throttle surfaces as "non-JSON response", which reads like a broken endpoint
+  rather than back-pressure.
 - ⚠️ **Security:** the token is a 30-day long-lived credential — keep it server-side, never in
   the frontend or version control; manage both credentials and token as env vars / secrets.
   Trace logs **never record request/response bodies** (see "Errors & debugging").
@@ -376,6 +385,9 @@ recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
 - **Mapping:** HTTP `401`/`403`→`AUTH`, `404`→`NOT_FOUND`, `409`→`CONFLICT`, `400`/`422`→`VALIDATION`,
   `429` and `5xx`→`PROVIDER`; transport failure→`NETWORK`. Both member2 error shapes (framework
   `{message}` / `{errors}` and business `{status:"error",error:{title}}`) are normalized.
+- **Rate limiting (429):** the unified `InvoiceErrorCode` has no rate-limit member, so it stays
+  `PROVIDER` — but the message spells out "rate limit / limit N/min / Retry after Ns / Reuse one
+  SimpanyClient", and `raw` carries `{ status: 429, retryAfterSeconds, limit }` for back-off.
 - **Tracing:** set `debug` to receive per-request metadata (`provider` / `method` / `url` / `status` /
   `durationMs` / `error`); request/response **bodies are never logged** (possible PII / encrypted
   content). To capture bodies, wrap your own `fetch` and pass it as `config.fetch`.
