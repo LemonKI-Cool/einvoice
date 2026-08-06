@@ -120,7 +120,7 @@ curl -s https://api.simpany.co/v1/me -H 'authorization: Bearer <JWT>'
 
 | 方法 | 端點 | 說明 | 異動? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | 發票列表;API 必填的 `status`+`startDate`+`endDate` 預設為 `ALL` + **往前約 12 個月**(有 12 個月硬上限,見下) | 唯讀 |
+| `listReceipts(query?)` | GET `/receipts` | 發票列表;API 必填的 `status`+`startDate`+`endDate` 預設為 `ALL` + **往前約 12 個月**(有 12 個月硬上限,見下),並**自動翻頁取完**(見下) | 唯讀 |
 | `simpanyListWindows(from, to)` | (純函式) | 把長區間切成 API 可接受的多段視窗(見下) | 不發請求 |
 | `canIssue(n?)` | GET(上述兩支) | **開立前額度預檢**:一次檢查訂閱額度與字軌剩餘,回報哪一邊是瓶頸(見下) | 唯讀 |
 | `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=民國年` | **字軌**:每段的總量 / 已開立 / 剩餘(見下;`year` 為**民國年**,預設當年) | 唯讀 |
@@ -189,6 +189,28 @@ for (const w of simpanyListWindows("2023-01-01", "2026-08-07")) {
 切出來的視窗**連續、不重疊、剛好覆蓋**你要的區間,且每一段都保證通過 API 的跨度檢查
 (月份運算在短月份不可逆——`3/1 + 2 個月 − 1 天 = 4/30`,但 `4/30 − 2 個月` 會溢位回 `3/2`——
 切分器會逐日退讓直到合法)。
+
+### 分頁:預設自動取完(因為截斷是安靜的)
+
+⚠️ **列表回應是裸陣列,沒有任何分頁 metadata**——沒有 `total`、沒有 `lastPage`、沒有 `meta`。
+所以拿到一頁的人**無從得知手上是不是只有一部分**。這跟西元年那個問題是同一類:
+**200 + 不完整的資料,比 422 危險**,而且失效路徑一樣貴——
+
+> 視窗內有 300 張、伺服器預設頁面大小 50 → 查重只掃到前 50 張 → 判定「沒開過」→ 重複開立 → 跨期只能開折讓。
+
+因此 `listReceipts()` **預設會自動翻頁直到取完**。兩種退出方式,都只發一次請求:
+
+| 呼叫 | 行為 |
+|---|---|
+| `listReceipts()` | 自動翻頁,取完整個視窗 |
+| `listReceipts({ page: 2 })` | 只取第 2 頁(你自己控制分頁) |
+| `listReceipts({ limit: 5 })` | 只取 5 筆——`limit` 是**筆數上限**,不是「每頁 5 筆一直翻」 |
+
+終止條件是**回傳空頁**,而不是「回傳筆數 < 我要求的 limit」。因為伺服器可能把 `limit`
+壓到比你要求的小,那時「短頁」並不代表結束,提早停就會漏掉上限之後的全部資料——正是這段
+迴圈要防的同一種安靜截斷。另有失控保護:連續取滿上限頁數會**丟錯**,而不是安靜回傳前綴。
+
+> `allowances` 列表推測有同樣行為,但目前沒有折讓資料可測;adapter 也還沒包成方法。
 
 ### 常用品項(frequent items)
 
@@ -343,6 +365,11 @@ if (canInvalidate) {
   (規則為 `startDate >= endDate − 12 個月`)。
 - ✅ **字軌 status** 為 `ENABLED` / `EXPIRED`(與發票 status 不同列舉);**過期字軌保留
   `remainingQuantity`**(實測有一段過期字軌仍回報 200 號未用),所以額度計算必須只算 `ENABLED`。
+- ✅ **列表分頁**:`page` / `limit` 可用(`limit` 上限很寬,實測 1000 可行),但回應是**裸陣列、
+  完全沒有分頁 metadata**,超出頁面大小時會安靜截斷且無從察覺。
+- ✅ **`simpanyListWindows()` 的輸出逐段實打伺服器**:`2023-01-01 … 2026-08-07` 切成 4 段,
+  段段連續不重疊、首尾剛好覆蓋,四段全部被接受——確認 adapter 的跨度述詞與伺服器規則一致
+  (不只是自洽)。
 - ✅ **字軌** `GET /track-numbers`:必填 `year` 且為**民國年**(如 115);傳西元年**不會報錯、
   只回空陣列**;`/track-numbers/enabled` 不需 `year`。實際欄位:`{ id, year, month, type,
   track, beginNumber, endNumber, lastUsedNumber, remainingQuantity, status, can* }`
@@ -385,7 +412,7 @@ console.table(
   })),
 );
 
-// 3) 已開立發票列表(確認可讀取)
+// 3) 已開立發票列表(確認可讀取;limit 是筆數上限,只發一次請求)
 const receipts = await provider.listReceipts({ limit: 5 });
 console.log(`可讀到 ${receipts.length} 張發票`);
 

@@ -133,7 +133,7 @@ nothing — handy for verifying the integration, reconciliation, and pre-issue c
 
 | Method | Endpoint | Purpose | Mutates? |
 |---|---|---|---|
-| `listReceipts(query?)` | GET `/receipts` | list issued invoices; the API-required `status`+`startDate`+`endDate` default to `ALL` + the **~12 months ending today** (hard 12-month cap, below) | read-only |
+| `listReceipts(query?)` | GET `/receipts` | list issued invoices; the API-required `status`+`startDate`+`endDate` default to `ALL` + the **~12 months ending today** (hard 12-month cap, below), **paging through the window** (below) | read-only |
 | `simpanyListWindows(from, to)` | (pure function) | split a longer period into windows the API accepts (below) | no request |
 | `canIssue(n?)` | GET (both of the above) | **pre-issue capacity check**: both quota limits at once, naming the bottleneck (below) | read-only |
 | `listTrackNumbers({year?, enabledOnly?})` | GET `/track-numbers?year=ROC` | **track numbers**: total / used / remaining per range (below; `year` is a **ROC (民國) year**, default current) | read-only |
@@ -216,6 +216,34 @@ is guaranteed to pass the API's span check — month arithmetic does not round-t
 short months (1 March plus two months less a day is 30 April, yet 30 April minus two
 months overflows to 2 March), so the splitter gives back a day at a time until each
 window is legal.
+
+### Pagination: the whole window by default, because truncation is silent
+
+⚠️ **The list response is a bare array with no pagination metadata** — no `total`, no
+`lastPage`, no `meta`. A caller handed one page has no way to tell it is holding a
+partial answer. This is the same hazard as the Gregorian year: **200 with incomplete
+data is more dangerous than a 422**, and the failure path is just as expensive —
+
+> 300 invoices in the window, server page size 50 → the duplicate check scans only the
+> first 50 → the order looks uninvoiced → a second invoice goes out → once the period
+> has closed, only an allowance can undo it.
+
+So `listReceipts()` **pages through the window by default**. Two ways out, each a single
+request:
+
+| Call | Behaviour |
+|---|---|
+| `listReceipts()` | pages until the window is exhausted |
+| `listReceipts({ page: 2 })` | that page only — you drive pagination |
+| `listReceipts({ limit: 5 })` | 5 rows — `limit` caps the rows, it does not page in fives |
+
+The loop ends on an **empty page**, not on "fewer rows than the limit I asked for": the
+server may cap `limit` below the request, and stopping at a short page would drop
+everything past that cap — the very truncation the loop exists to prevent. A runaway
+guard **throws** rather than quietly returning a prefix.
+
+> The allowances list is presumed to behave the same way, untested for want of allowance
+> data; no provider method wraps it yet.
 
 ### Frequent items
 
@@ -383,6 +411,13 @@ recipients), `zeroTaxRateReasonCode` / `customsClearanceType` (zero-rate),
   status), and an **expired track keeps its `remainingQuantity`** (a lapsed period was
   observed still reporting 200 numbers unused) — capacity arithmetic must count
   `ENABLED` tracks only.
+- ✅ **List pagination**: `page` / `limit` work (`limit` accepts at least 1000), but the
+  response is a **bare array with no pagination metadata**, so anything past the page
+  size is truncated silently and undetectably.
+- ✅ **`simpanyListWindows()` output was replayed against the server**: `2023-01-01 …
+  2026-08-07` split into 4 windows, contiguous and covering the range exactly, and all
+  four were accepted — confirming the adapter's span predicate matches the server's rule
+  rather than merely being self-consistent.
 - ✅ **Tracks** `GET /track-numbers`: requires `year` as a **ROC (民國) year** (e.g. 115);
   a Gregorian year is **not an error — it returns an empty list**;
   `/track-numbers/enabled` takes no `year`. Actual fields: `{ id, year, month, type,
@@ -431,7 +466,7 @@ console.table(
   })),
 );
 
-// 3) list issued invoices (confirms read access)
+// 3) list issued invoices (confirms read access; `limit` caps the rows — one request)
 const receipts = await provider.listReceipts({ limit: 5 });
 console.log(`read ${receipts.length} invoices`);
 
