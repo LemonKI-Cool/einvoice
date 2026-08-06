@@ -97,11 +97,12 @@ interface SimpanyProviderOptions {
 /**
  * Simpany (simpany.co) e-invoice provider.
  *
- * ⚠️ UNVERIFIED: the five operations' endpoints, payloads and enums were compiled
- * by hand, are NOT from a published API, are NOT confirmed against a live
- * e-invoice-enabled account, and may be inaccurate. The auth layer
- * (`me` / `resolveCompanyId`) IS verified. Treat operation behaviour as
- * best-effort and file GitHub issues for any discrepancy.
+ * Verification status: the auth layer (`me` / `resolveCompanyId`) and the READ
+ * path — routes, required list/track filters, detail response fields and enum
+ * values — are verified against a live e-invoice-enabled account (PR #5).
+ * ⚠️ The WRITE payloads (issue / void / allowance / void-allowance) remain
+ * hand-compiled and UNVERIFIED — treat them as best-effort and file GitHub
+ * issues for any discrepancy.
  *
  * Operations run on the receipt host (`member2.simpany.co`) and are scoped to a
  * company id (from config or resolved via `/me`). void / query / allowance key
@@ -285,7 +286,9 @@ export class SimpanyProvider implements InvoiceProvider {
     );
     const total = Number(r.totalAmount ?? 0);
     const tax = Number(r.taxAmount ?? 0);
-    const sales = r.salesAmount != null ? Number(r.salesAmount) : total - tax;
+    // `untaxedAmount` is the verified field name (and authoritative when the B2B
+    // ±1 tax adjustment makes untaxed + tax ≠ total).
+    const sales = r.untaxedAmount != null ? Number(r.untaxedAmount) : total - tax;
     const emails = (r.buyerEmails as string[] | undefined) ?? [];
     return {
       invoiceNumber: String(r.invoiceNumber ?? ""),

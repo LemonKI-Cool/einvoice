@@ -60,7 +60,7 @@ describe("issue", () => {
           id: 900,
           invoiceNumber: "AB12345678",
           randomNumber: "4321",
-          issuedAt: "2026-08-05 10:00:00",
+          issuedAt: "2026-08-05T10:00:00+08:00",
           totalAmount: 105,
           status: "ISSUED",
         });
@@ -81,6 +81,8 @@ describe("issue", () => {
     expect(res.randomCode).toBe("4321");
     expect(res.orderId).toBe("ORD-1");
     expect(res.status).toBe("ISSUED");
+    // issuedAt is ISO8601 with a +08:00 offset (verified live).
+    expect(res.invoiceDate.toISOString()).toBe("2026-08-05T02:00:00.000Z");
   });
 
   it("posts to /receipts/b2b and includes the buyer vat when a ubn is present", async () => {
@@ -93,8 +95,8 @@ describe("issue", () => {
         return rok({
           id: 1,
           invoiceNumber: "AB1",
-          randomNumber: "0001",
-          issuedAt: "2026-08-05 10:00:00",
+          randomNumber: null, // B2B invoices carry no random code (verified live)
+          issuedAt: "2026-08-05T10:00:00+08:00",
         });
       }),
     );
@@ -228,7 +230,7 @@ describe("allowance", () => {
       ),
       http.post(rurl(`/c/${CID}/receipts/900/draft-allowances`), async ({ request }) => {
         body = await request.json();
-        return rok({ allowanceNumber: "ALW0001", issuedAt: "2026-08-05 11:00:00" });
+        return rok({ allowanceNumber: "ALW0001", issuedAt: "2026-08-05T11:00:00+08:00" });
       }),
     );
     const res = await testProvider().allowance({
@@ -327,25 +329,48 @@ describe("voidAllowance", () => {
 });
 
 describe("query", () => {
-  it("GETs the receipt detail and maps it to the unified shape", async () => {
+  it("GETs the receipt detail and maps the verified response shape", async () => {
     server.use(
       login(),
       me(),
+      // The field set a live B2B detail actually returns (masked; see PR #5).
       http.get(rurl(`/c/${CID}/receipts/900`), () =>
         rok({
           id: 900,
-          invoiceNumber: "AB12345678",
-          randomNumber: "4321",
-          issuedAt: "2026-08-05 10:00:00",
-          status: "ISSUED",
-          type: "B2B",
           customId: "ORD-1",
-          totalAmount: 105,
-          taxAmount: 5,
-          buyerName: "買方",
+          type: "B2B",
+          status: "ISSUED",
+          uploadStatus: "COMPLETED",
+          printStatus: "NOT_PRINTED",
+          invoiceNumber: "AB12345678",
+          randomNumber: null, // null on B2B (verified live)
           buyerVat: "12345678",
+          buyerName: "買方",
+          buyerAddress: null,
           buyerEmails: ["b@e.com"],
-          items: [{ id: 11, name: "商品A", quantity: 2, price: 50, amount: 100 }],
+          taxType: "TAXABLE",
+          customsClearanceType: "BLANK",
+          zeroTaxRateReason: null,
+          taxRate: 5,
+          isTaxIncluded: false,
+          isTaxAmountAdjusted: false,
+          taxAmount: 5,
+          untaxedAmount: 100,
+          totalAmount: 105,
+          remainingAmount: 105,
+          remark: "",
+          carrierType: "NO_CARRIER",
+          carrierNumber: null,
+          npoBan: null,
+          invalidReason: null,
+          issuedAt: "2026-08-05T10:00:00+08:00",
+          invalidatedAt: null,
+          canInvalidate: true,
+          canIssueAllowance: true,
+          canPrint: true,
+          items: [{ id: "11", name: "商品A", quantity: 2, price: 50, amount: 100 }],
+          allowances: [],
+          emailHistories: [],
         }),
       ),
     );
@@ -355,6 +380,8 @@ describe("query", () => {
     });
     expect(res.invoiceNumber).toBe("AB12345678");
     expect(res.status).toBe("ISSUED");
+    expect(res.randomCode).toBe("");
+    expect(res.invoiceDate.toISOString()).toBe("2026-08-05T02:00:00.000Z");
     expect(res.amount).toEqual({ salesAmount: 100, taxAmount: 5, totalAmount: 105 });
     expect(res.buyer).toMatchObject({ name: "買方", ubn: "12345678", email: "b@e.com" });
     expect(res.items[0]).toMatchObject({
@@ -363,6 +390,7 @@ describe("query", () => {
       unitPrice: 50,
       amount: 100,
     });
+    expect(res.raw).toMatchObject({ canInvalidate: true, uploadStatus: "COMPLETED" });
   });
 
   it("throws VALIDATION without providerOptions.receiptId (no invoice-number lookup)", async () => {
