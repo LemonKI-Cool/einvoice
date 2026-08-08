@@ -1,5 +1,11 @@
 # @paid-tw/einvoice-ezreceipt
 
+## 0.2.3
+
+### Patch Changes
+
+- fb5ddc2: Add `EzreceiptProvider.listAllInvoices()` — fetches page 1 to learn the total `entries`, then follows pagination to concatenate every raw row. The ergonomic path for reconciliation/export, since the single-page `listInvoices` caps at `pageSize`.
+
 ## 0.2.2
 
 ### Patch Changes
