@@ -227,6 +227,25 @@ export class EzreceiptProvider implements InvoiceProvider {
   }
 
   /**
+   * 條列發票 across ALL pages. Fetches page 1 to learn the total `entries`, then
+   * the remaining pages, and returns every raw row concatenated — the ergonomic
+   * path for reconciliation/export (the single-page {@link EzreceiptProvider.listInvoices}
+   * caps at `pageSize`). `pageSize` defaults to 200; `page` in the input is ignored.
+   */
+  async listAllInvoices(
+    input: Omit<ListInvoicesInput, "page"> = {},
+  ): Promise<Record<string, unknown>[]> {
+    const pageSize = input.pageSize && input.pageSize > 0 ? input.pageSize : 200;
+    const first = await this.listInvoices({ ...input, page: 1, pageSize });
+    const rows = [...first.list];
+    const pages = Math.ceil(first.entries / pageSize);
+    for (let page = 2; page <= pages; page++) {
+      rows.push(...(await this.listInvoices({ ...input, page, pageSize })).list);
+    }
+    return rows;
+  }
+
+  /**
    * 註銷發票 — distinct from {@link EzreceiptProvider.void} (作廢): a 註銷 can run
    * when the invoice is 已開立 / 已作廢 / 已折讓作廢 and is what "void + reissue"
    * builds on. B2B invoices CANNOT be revoked via the value-added centre (a 財政部

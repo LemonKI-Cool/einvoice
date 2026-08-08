@@ -582,6 +582,23 @@ describe("listInvoices (extension)", () => {
     });
   });
 
+  it("listAllInvoices pages through every entry", async () => {
+    const pagesRequested: number[] = [];
+    const all = [{ invNo: "A" }, { invNo: "B" }, { invNo: "C" }];
+    server.use(
+      loginHandler(),
+      http.post(url(EP.list), async ({ request }) => {
+        const body = (await request.json()) as { _pn: number; _ps: number };
+        pagesRequested.push(body._pn);
+        const start = (body._pn - 1) * body._ps;
+        return ok({ list: all.slice(start, start + body._ps), entries: all.length });
+      }),
+    );
+    const rows = await testProvider().listAllInvoices({ period: "202606", pageSize: 2 });
+    expect(rows).toEqual(all);
+    expect(pagesRequested).toEqual([1, 2]); // ceil(3/2) = 2 pages
+  });
+
   it("uses a fromTime/toTime range when given", async () => {
     let body: Record<string, unknown> | undefined;
     server.use(
