@@ -53,6 +53,18 @@ describe("NatClient.parseNatCsv", () => {
     const csv = 'M,發票號碼,備註\r\nD,發票號碼,品名\r\nM,AB12345678,"truncated note';
     expect(() => NatClient.parseNatCsv(new TextEncoder().encode(csv))).toThrow(/quoted field/);
   });
+
+  test("throws on a D row whose width can't be reconciled to the header", () => {
+    const csv = [
+      "M,發票號碼,課稅別",
+      "D,發票號碼,品名",
+      "M,AB12345678,應稅",
+      "D,AB12345678,顧問服務,unexpected-extra", // one column too many for the D header
+      "",
+    ].join("\r\n");
+
+    expect(() => NatClient.parseNatCsv(new TextEncoder().encode(csv))).toThrow(/D row has/);
+  });
 });
 
 describe("dedupeNatInvoices", () => {

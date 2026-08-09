@@ -1,7 +1,7 @@
 // Export 折讓單 (btb412w) history as native CSV, one file per month, resumable.
 //   NAT_OP_ITEM='<your 1Password item>' bun run nat-export-allowances.ts [fromYm] [toYm]
 //   OUTDIR=/path/to/dir  overrides the output directory (default ./out/nat-allowances).
-import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync, renameSync, rmSync, chmodSync } from "node:fs";
 import { NatClient, isMonthFinal } from "./nat-client.ts";
 
 const fromYm = process.argv[2] ?? "2020-02";
@@ -11,8 +11,8 @@ const toYm = process.argv[3] ?? currentYm;
 const OUTDIR = process.env.OUTDIR ?? "./out/nat-allowances";
 mkdirSync(OUTDIR, { recursive: true });
 
-if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(fromYm) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(toYm) || fromYm > toYm) {
-  throw new Error(`invalid month range: ${fromYm}..${toYm}`);
+if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(fromYm) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(toYm) || fromYm > toYm || toYm > currentYm) {
+  throw new Error(`invalid month range: ${fromYm}..${toYm} (current month is ${currentYm})`);
 }
 
 function writePrivateAtomic(path: string, data: string | Uint8Array): void {
@@ -21,11 +21,11 @@ function writePrivateAtomic(path: string, data: string | Uint8Array): void {
   renameSync(tmp, path);
 }
 
-// A month fetched while it is still open is provisional: mark it so the next run
-// after the month closes refreshes it once (and then clears the marker → final).
-function markOpenState(openPath: string, isCurrent: boolean): void {
-  if (isCurrent) writePrivateAtomic(openPath, "open\n");
-  else if (existsSync(openPath)) rmSync(openPath);
+// Clear the provisional `.open` marker once a month has been refreshed after it closed.
+// (The marker is written up-front, before a current-month fetch, so a crash mid-fetch
+// can't leave the archive looking final.) Only ever removed for a closed month.
+function finalizeOpenMarker(openPath: string, isCurrent: boolean): void {
+  if (!isCurrent && existsSync(openPath)) rmSync(openPath);
 }
 
 function months(a: string, b: string): string[] {
@@ -45,10 +45,17 @@ try {
     const empty = `${out}.empty`;
     const open = `${out}.open`;
     if (existsSync(out)) chmodSync(out, 0o600); // tighten perms on files left by an earlier (pre-0600) run
+    // Migrate a legacy empty-month marker: old versions wrote "# no 折讓單 …" into the .csv
+    // itself. Convert it to the .empty scheme so it isn't mistaken for real CSV data.
+    if (existsSync(out) && statSync(out).size > 0 && statSync(out).size < 200 && readFileSync(out, "utf8").startsWith("# no 折讓單")) {
+      writePrivateAtomic(empty, `no allowances for ${ym}\n`);
+      rmSync(out);
+    }
     // Final only once fetched after the month closed; the current month and any archive
     // taken while the month was open are always re-fetched (see isMonthFinal).
     const hasData = existsSync(out) && statSync(out).size > 0;
     if (isMonthFinal({ hasData, hasEmpty: existsSync(empty), hasOpen: existsSync(open), isCurrent: ym === currentYm })) { console.log(`${ym}  (skip, final)`); skipped++; continue; }
+    if (ym === currentYm) writePrivateAtomic(open, "open\n"); // provisional up-front: a crash mid-fetch must not look final
     const [y, m] = ym.split("-").map(Number);
     const to = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
     const stamp = Date.now();
@@ -66,7 +73,7 @@ try {
       if (Number(job.dataCount) === 0) {
         writePrivateAtomic(empty, `no allowances for ${ym}\n`); // empty month (download would 400); marker for resumability
         if (existsSync(out)) rmSync(out); // drop a stale data file if this month is now empty
-        markOpenState(open, ym === currentYm);
+        finalizeOpenMarker(open, ym === currentYm);
         console.log(`${ym}  (empty, no 折讓)`);
         done++;
         continue;
@@ -75,7 +82,7 @@ try {
       if (bytes.length === 0) throw new Error("download returned an empty file");
       writePrivateAtomic(out, bytes);
       if (existsSync(empty)) rmSync(empty); // month now has data — drop the stale empty marker
-      markOpenState(open, ym === currentYm);
+      finalizeOpenMarker(open, ym === currentYm);
       console.log(`${ym}  M+D=${job.dataCount}  ${(bytes.length / 1024).toFixed(0)}KB  -> ${out.split("/").pop()}`);
       done++;
     } catch (e) {

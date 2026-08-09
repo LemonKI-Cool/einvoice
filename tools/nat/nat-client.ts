@@ -347,6 +347,11 @@ export class NatClient {
           seenDHead = true;
           continue;
         } // skip header
+        // Same strict-width policy as M rows: a D row that doesn't line up with its
+        // header would silently shift line-item values, so refuse rather than corrupt it.
+        if (r.length !== dHead.length) {
+          throw new Error(`NAT D row has ${r.length} columns, expected ${dHead.length} — unrecognized delimiter corruption`);
+        }
         const item: Record<string, string> = {};
         for (let i = 1; i < dHead.length; i++) item[dHead[i]] = r[i] ?? "";
         invoices[invoices.length - 1]?.items.push(item);
