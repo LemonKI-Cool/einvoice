@@ -1,5 +1,5 @@
-import { describe, expect, spyOn, test } from "bun:test";
-import { dedupeNatInvoices, NatClient, type NatInvoice } from "../nat-client.ts";
+import { describe, expect, test } from "bun:test";
+import { dedupeNatInvoices, isMonthArchived, NatClient, type NatInvoice } from "../nat-client.ts";
 
 describe("NatClient.parseNatCsv", () => {
   test("preserves quoted commas, escaped quotes, and multiline fields", () => {
@@ -37,6 +37,17 @@ describe("NatClient.parseNatCsv", () => {
     expect(invoice["寄送日期"]).toBe("2026-01-02 03:04:05");
     expect(invoice["課稅別"]).toBe("應稅");
   });
+
+  test("throws on an M row whose width can't be reconciled to the header", () => {
+    const csv = [
+      "M,發票號碼,買方統一編號,賣方統一編號,課稅別",
+      "D,發票號碼,品名",
+      "M,AB12345678,12345678,87654321,應稅,unexpected-extra", // one column too many, not the buyer-name defect
+      "",
+    ].join("\r\n");
+
+    expect(() => NatClient.parseNatCsv(new TextEncoder().encode(csv))).toThrow(/columns, expected/);
+  });
 });
 
 describe("dedupeNatInvoices", () => {
@@ -51,12 +62,16 @@ describe("dedupeNatInvoices", () => {
     expect(dedupeNatInvoices([invoice("100"), invoice("100")])).toHaveLength(1);
   });
 
-  test("keeps the first row and warns on conflicting content under the same key", () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    const deduped = dedupeNatInvoices([invoice("100"), invoice("200")]);
-    expect(deduped).toHaveLength(1);
-    expect(deduped[0]["總計"]).toBe("100");
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+  test("rejects conflicting content under the same statutory key", () => {
+    expect(() => dedupeNatInvoices([invoice("100"), invoice("200")])).toThrow("conflicting content");
+  });
+});
+
+describe("isMonthArchived", () => {
+  test("exactly one of data/empty present is archived; neither or both is not", () => {
+    expect(isMonthArchived(false, false)).toBe(false); // nothing written yet → not archived
+    expect(isMonthArchived(true, false)).toBe(true); // data file only → archived
+    expect(isMonthArchived(false, true)).toBe(true); // empty marker only → archived
+    expect(isMonthArchived(true, true)).toBe(false); // both (crash between write+cleanup) → re-fetch
   });
 });

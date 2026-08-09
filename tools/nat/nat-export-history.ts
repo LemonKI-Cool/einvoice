@@ -3,7 +3,7 @@
 //   NAT_OP_ITEM='<your 1Password item>' bun run nat-export-history.ts [fromYm] [toYm]
 //   OUTDIR=/path/to/dir  overrides the output directory (default ./out/nat-history).
 import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync } from "node:fs";
-import { NatClient } from "./nat-client.ts";
+import { NatClient, isMonthArchived } from "./nat-client.ts";
 
 const fromYm = process.argv[2] ?? "2020-02";
 // Resolve "current month" in Asia/Taipei (the portal's zone), not the host's, so a
@@ -40,8 +40,8 @@ try {
     const empty = `${out}.empty`;
     // Only closed months are final; the current (still-open) month is always re-fetched
     // so invoices added later in the month aren't missed on a resumed/scheduled run.
-    const archived = (existsSync(out) && statSync(out).size > 0) || existsSync(empty);
-    if (archived && ym !== currentYm) { console.log(`${ym}  (skip, archived)`); skipped++; continue; }
+    const hasData = existsSync(out) && statSync(out).size > 0;
+    if (isMonthArchived(hasData, existsSync(empty)) && ym !== currentYm) { console.log(`${ym}  (skip, archived)`); skipped++; continue; }
     const [y, m] = ym.split("-").map(Number);
     const to = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
     const stamp = Date.now();

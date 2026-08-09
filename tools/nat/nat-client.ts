@@ -35,7 +35,16 @@ export interface NatInvoice {
   [col: string]: string | Array<Record<string, string>>;
 }
 
-/** Remove exact cross-month portal overlaps; on a reused statutory key with conflicting content, keep the first and warn. */
+/**
+ * A month's output is "archived" (skippable) only when exactly one of the data file /
+ * empty marker is present. Both present — a crash between writing one and removing the
+ * other — is contradictory, so it is NOT archived and the next run re-fetches it.
+ */
+export function isMonthArchived(hasData: boolean, hasEmpty: boolean): boolean {
+  return hasData !== hasEmpty;
+}
+
+/** Remove exact cross-month portal overlaps; reject a reused statutory key with conflicting content. */
 export function dedupeNatInvoices(invoices: NatInvoice[]): NatInvoice[] {
   const unique = new Map<string, { invoice: NatInvoice; signature: string }>();
   for (const invoice of invoices) {
@@ -44,9 +53,9 @@ export function dedupeNatInvoices(invoices: NatInvoice[]): NatInvoice[] {
     const signature = JSON.stringify(invoice);
     const previous = unique.get(key);
     if (previous) {
-      // Same statutory key, different content: surface it but keep the first so a long
-      // archival run isn't aborted by a single anomaly (e.g. a later void/amendment).
-      if (previous.signature !== signature) console.warn(`NAT duplicate invoice key with conflicting content — keeping the first: ${key}`);
+      // Same statutory key, different content: a silent keep-first would make totals
+      // depend on input order and could retain pre-void/amendment data — fail loudly.
+      if (previous.signature !== signature) throw new Error(`NAT duplicate invoice key has conflicting content: ${key}`);
       continue;
     }
     unique.set(key, { invoice, signature });
@@ -300,6 +309,12 @@ export class NatClient {
           continue;
         } // skip header
         const normalized = normalizeMasterRow(r, mHead);
+        // A width we can't reconcile to the header means an unrecognized delimiter
+        // corruption; mapping it would silently shift values into the wrong columns
+        // (and misattribute the following D rows), so refuse rather than corrupt the archive.
+        if (normalized.length !== mHead.length) {
+          throw new Error(`NAT M row has ${normalized.length} columns, expected ${mHead.length} — unrecognized delimiter corruption`);
+        }
         const inv: NatInvoice = { items: [] };
         for (let i = 1; i < mHead.length; i++) inv[mHead[i]] = normalized[i] ?? "";
         invoices.push(inv);
