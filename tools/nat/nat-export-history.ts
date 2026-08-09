@@ -2,7 +2,7 @@
 // native CSV, one file per month, resumable. Range defaults to 2020-02 → current month.
 //   NAT_OP_ITEM='<your 1Password item>' bun run nat-export-history.ts [fromYm] [toYm]
 //   OUTDIR=/path/to/dir  overrides the output directory (default ./out/nat-history).
-import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync, chmodSync } from "node:fs";
 import { NatClient, isMonthArchived } from "./nat-client.ts";
 
 const fromYm = process.argv[2] ?? "2020-02";
@@ -38,6 +38,7 @@ try {
   for (const ym of months(fromYm, toYm)) {
     const out = `${OUTDIR}/nat_${ban}_${ym}.csv`;
     const empty = `${out}.empty`;
+    if (existsSync(out)) chmodSync(out, 0o600); // tighten perms on files left by an earlier (pre-0600) run
     // Only closed months are final; the current (still-open) month is always re-fetched
     // so invoices added later in the month aren't missed on a resumed/scheduled run.
     const hasData = existsSync(out) && statSync(out).size > 0;
@@ -74,6 +75,7 @@ try {
     }
   }
   console.log(`\nDONE: ${done} downloaded, ${skipped} skipped, ${failed} failed. Dir: ${OUTDIR}`);
+  if (failed > 0) process.exitCode = 1; // surface partial failure to unattended/scheduled callers
 } finally {
   await client.close();
 }

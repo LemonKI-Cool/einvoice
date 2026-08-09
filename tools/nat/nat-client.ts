@@ -48,8 +48,14 @@ export function isMonthArchived(hasData: boolean, hasEmpty: boolean): boolean {
 export function dedupeNatInvoices(invoices: NatInvoice[]): NatInvoice[] {
   const unique = new Map<string, { invoice: NatInvoice; signature: string }>();
   for (const invoice of invoices) {
-    const key = `${invoice["賣方統一編號"] ?? ""}|${invoice["發票號碼"] ?? ""}`;
-    if (key === "|") throw new Error("NAT invoice is missing both seller UBN and invoice number");
+    const seller = (invoice["賣方統一編號"] as string) ?? "";
+    const number = (invoice["發票號碼"] as string) ?? "";
+    // 發票號碼 tracks (字軌) are reassigned per 期別, so the same number legitimately
+    // recurs in a later period — key on 發票日期 too, or a later invoice looks like a conflict.
+    const date = (invoice["發票日期"] as string) ?? "";
+    const missing = [!seller && "賣方統一編號", !number && "發票號碼", !date && "發票日期"].filter(Boolean);
+    if (missing.length) throw new Error(`NAT invoice is missing key component(s): ${missing.join(", ")}`);
+    const key = `${seller}|${number}|${date}`;
     const signature = JSON.stringify(invoice);
     const previous = unique.get(key);
     if (previous) {
@@ -107,6 +113,9 @@ function parseCsv(text: string): string[][] {
       cur = "";
     } else cur += ch;
   }
+  // An open quote at EOF means the stream ended mid-field \u2014 a truncated download that
+  // still lined up its delimiters would otherwise archive silently with clipped content.
+  if (q) throw new Error("NAT CSV ended inside a quoted field \u2014 download may be truncated");
   if (cur.length || row.length) {
     row.push(cur);
     rows.push(row);

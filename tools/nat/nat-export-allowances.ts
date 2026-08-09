@@ -1,7 +1,7 @@
 // Export 折讓單 (btb412w) history as native CSV, one file per month, resumable.
 //   NAT_OP_ITEM='<your 1Password item>' bun run nat-export-allowances.ts [fromYm] [toYm]
 //   OUTDIR=/path/to/dir  overrides the output directory (default ./out/nat-allowances).
-import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync, chmodSync } from "node:fs";
 import { NatClient, isMonthArchived } from "./nat-client.ts";
 
 const fromYm = process.argv[2] ?? "2020-02";
@@ -36,6 +36,7 @@ try {
   for (const ym of months(fromYm, toYm)) {
     const out = `${OUTDIR}/alw_${ban}_${ym}.csv`;
     const empty = `${out}.empty`;
+    if (existsSync(out)) chmodSync(out, 0o600); // tighten perms on files left by an earlier (pre-0600) run
     // Only closed months are final; the current (still-open) month is always re-fetched.
     const hasData = existsSync(out) && statSync(out).size > 0;
     if (isMonthArchived(hasData, existsSync(empty)) && ym !== currentYm) { console.log(`${ym}  (skip, archived)`); skipped++; continue; }
@@ -72,6 +73,7 @@ try {
     }
   }
   console.log(`\nDONE: ${done} downloaded, ${skipped} skipped, ${failed} failed. Dir: ${OUTDIR}`);
+  if (failed > 0) process.exitCode = 1; // surface partial failure to unattended/scheduled callers
 } finally {
   await client.close();
 }

@@ -48,12 +48,18 @@ describe("NatClient.parseNatCsv", () => {
 
     expect(() => NatClient.parseNatCsv(new TextEncoder().encode(csv))).toThrow(/columns, expected/);
   });
+
+  test("throws on a CSV truncated inside a quoted field", () => {
+    const csv = 'M,發票號碼,備註\r\nD,發票號碼,品名\r\nM,AB12345678,"truncated note';
+    expect(() => NatClient.parseNatCsv(new TextEncoder().encode(csv))).toThrow(/quoted field/);
+  });
 });
 
 describe("dedupeNatInvoices", () => {
-  const invoice = (total: string): NatInvoice => ({
+  const invoice = (total: string, date = "2024-03-15"): NatInvoice => ({
     發票號碼: "AB12345678",
     賣方統一編號: "12345678",
+    發票日期: date,
     總計: total,
     items: [{ 品名: "測試品項" }],
   });
@@ -64,6 +70,14 @@ describe("dedupeNatInvoices", () => {
 
   test("rejects conflicting content under the same statutory key", () => {
     expect(() => dedupeNatInvoices([invoice("100"), invoice("200")])).toThrow("conflicting content");
+  });
+
+  test("keeps a number reused in a different period (distinct 發票日期)", () => {
+    expect(dedupeNatInvoices([invoice("100", "2024-03-15"), invoice("100", "2026-03-15")])).toHaveLength(2);
+  });
+
+  test("throws when a key component is missing", () => {
+    expect(() => dedupeNatInvoices([{ 發票號碼: "AB12345678", 總計: "100", items: [] } as NatInvoice])).toThrow(/missing key component/);
   });
 });
 
