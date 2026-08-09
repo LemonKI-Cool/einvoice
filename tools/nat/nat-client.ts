@@ -36,12 +36,19 @@ export interface NatInvoice {
 }
 
 /**
- * A month's output is "archived" (skippable) only when exactly one of the data file /
- * empty marker is present. Both present — a crash between writing one and removing the
- * other — is contradictory, so it is NOT archived and the next run re-fetches it.
+ * Whether a month's output is final (skippable). A month is final only once it was
+ * fetched AFTER it closed:
+ *  - the current (still-open) month is never final — always re-fetch it;
+ *  - an archive taken while the month was open (`.open` marker still present) is not
+ *    final until one post-close refresh clears the marker;
+ *  - otherwise exactly one of the data file / empty marker must be present (XOR). Both
+ *    present — a crash between writing one and removing the other — is contradictory,
+ *    so it is not final and the next run re-fetches to reconcile.
  */
-export function isMonthArchived(hasData: boolean, hasEmpty: boolean): boolean {
-  return hasData !== hasEmpty;
+export function isMonthFinal(opts: { hasData: boolean; hasEmpty: boolean; hasOpen: boolean; isCurrent: boolean }): boolean {
+  if (opts.isCurrent) return false;
+  if (opts.hasOpen) return false;
+  return opts.hasData !== opts.hasEmpty;
 }
 
 /** Remove exact cross-month portal overlaps; reject a reused statutory key with conflicting content. */
@@ -285,7 +292,15 @@ export class NatClient {
         await new Promise((r) => setTimeout(r, 3000));
         const jobs = await this.listJobs();
         job = jobs
-          .filter((j) => j.fileType === "CSV" && j.status === "2" && j.queryStartDate?.startsWith(ym) && Date.parse(j.applyDate) >= stamp - 60_000)
+          .filter(
+            (j) =>
+              j.ban === opts.ban &&
+              j.sellbuyType === opts.invType &&
+              j.fileType === "CSV" &&
+              j.status === "2" &&
+              j.queryStartDate?.startsWith(ym) &&
+              Date.parse(j.applyDate) >= stamp - 60_000,
+          )
           .sort((a, b) => b.seqNo - a.seqNo)[0];
       }
       if (!job) throw new Error(`export: ${ym} job did not complete`);

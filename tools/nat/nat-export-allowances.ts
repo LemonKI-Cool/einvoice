@@ -2,7 +2,7 @@
 //   NAT_OP_ITEM='<your 1Password item>' bun run nat-export-allowances.ts [fromYm] [toYm]
 //   OUTDIR=/path/to/dir  overrides the output directory (default ./out/nat-allowances).
 import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync, chmodSync } from "node:fs";
-import { NatClient, isMonthArchived } from "./nat-client.ts";
+import { NatClient, isMonthFinal } from "./nat-client.ts";
 
 const fromYm = process.argv[2] ?? "2020-02";
 // Resolve "current month" in Asia/Taipei (the portal's zone), not the host's.
@@ -21,6 +21,13 @@ function writePrivateAtomic(path: string, data: string | Uint8Array): void {
   renameSync(tmp, path);
 }
 
+// A month fetched while it is still open is provisional: mark it so the next run
+// after the month closes refreshes it once (and then clears the marker → final).
+function markOpenState(openPath: string, isCurrent: boolean): void {
+  if (isCurrent) writePrivateAtomic(openPath, "open\n");
+  else if (existsSync(openPath)) rmSync(openPath);
+}
+
 function months(a: string, b: string): string[] {
   const [fy, fm] = a.split("-").map(Number); const [ty, tm] = b.split("-").map(Number);
   const r: string[] = []; let y = fy, m = fm;
@@ -36,10 +43,12 @@ try {
   for (const ym of months(fromYm, toYm)) {
     const out = `${OUTDIR}/alw_${ban}_${ym}.csv`;
     const empty = `${out}.empty`;
+    const open = `${out}.open`;
     if (existsSync(out)) chmodSync(out, 0o600); // tighten perms on files left by an earlier (pre-0600) run
-    // Only closed months are final; the current (still-open) month is always re-fetched.
+    // Final only once fetched after the month closed; the current month and any archive
+    // taken while the month was open are always re-fetched (see isMonthFinal).
     const hasData = existsSync(out) && statSync(out).size > 0;
-    if (isMonthArchived(hasData, existsSync(empty)) && ym !== currentYm) { console.log(`${ym}  (skip, archived)`); skipped++; continue; }
+    if (isMonthFinal({ hasData, hasEmpty: existsSync(empty), hasOpen: existsSync(open), isCurrent: ym === currentYm })) { console.log(`${ym}  (skip, final)`); skipped++; continue; }
     const [y, m] = ym.split("-").map(Number);
     const to = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
     const stamp = Date.now();
@@ -50,13 +59,14 @@ try {
         await new Promise((r) => setTimeout(r, 3000));
         // match THIS month's job for THIS company, applied in this run, newest first
         job = (await client.listAllowanceJobs())
-          .filter((j) => j.ban === ban && j.fileType === "CSV" && j.status === "2" && j.queryStartDate?.startsWith(ym) && Date.parse(j.applyDate) >= stamp - 120_000)
+          .filter((j) => j.ban === ban && j.sellbuyType === "0" && j.fileType === "CSV" && j.status === "2" && j.queryStartDate?.startsWith(ym) && Date.parse(j.applyDate) >= stamp - 120_000)
           .sort((a, b) => b.seqNo - a.seqNo)[0];
       }
       if (!job) { console.log(`${ym}  ⚠️ job not ready (timeout)`); failed++; continue; }
       if (Number(job.dataCount) === 0) {
         writePrivateAtomic(empty, `no allowances for ${ym}\n`); // empty month (download would 400); marker for resumability
         if (existsSync(out)) rmSync(out); // drop a stale data file if this month is now empty
+        markOpenState(open, ym === currentYm);
         console.log(`${ym}  (empty, no 折讓)`);
         done++;
         continue;
@@ -65,6 +75,7 @@ try {
       if (bytes.length === 0) throw new Error("download returned an empty file");
       writePrivateAtomic(out, bytes);
       if (existsSync(empty)) rmSync(empty); // month now has data — drop the stale empty marker
+      markOpenState(open, ym === currentYm);
       console.log(`${ym}  M+D=${job.dataCount}  ${(bytes.length / 1024).toFixed(0)}KB  -> ${out.split("/").pop()}`);
       done++;
     } catch (e) {

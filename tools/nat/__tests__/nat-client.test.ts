@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dedupeNatInvoices, isMonthArchived, NatClient, type NatInvoice } from "../nat-client.ts";
+import { dedupeNatInvoices, isMonthFinal, NatClient, type NatInvoice } from "../nat-client.ts";
 
 describe("NatClient.parseNatCsv", () => {
   test("preserves quoted commas, escaped quotes, and multiline fields", () => {
@@ -81,11 +81,25 @@ describe("dedupeNatInvoices", () => {
   });
 });
 
-describe("isMonthArchived", () => {
-  test("exactly one of data/empty present is archived; neither or both is not", () => {
-    expect(isMonthArchived(false, false)).toBe(false); // nothing written yet → not archived
-    expect(isMonthArchived(true, false)).toBe(true); // data file only → archived
-    expect(isMonthArchived(false, true)).toBe(true); // empty marker only → archived
-    expect(isMonthArchived(true, true)).toBe(false); // both (crash between write+cleanup) → re-fetch
+describe("isMonthFinal", () => {
+  const f = (o: Partial<{ hasData: boolean; hasEmpty: boolean; hasOpen: boolean; isCurrent: boolean }>) =>
+    isMonthFinal({ hasData: false, hasEmpty: false, hasOpen: false, isCurrent: false, ...o });
+
+  test("the current (open) month is never final", () => {
+    expect(f({ isCurrent: true, hasData: true })).toBe(false);
+  });
+
+  test("an archive taken while the month was open is not final until refreshed post-close", () => {
+    expect(f({ hasData: true, hasOpen: true })).toBe(false);
+  });
+
+  test("a closed month with exactly one representation is final", () => {
+    expect(f({ hasData: true })).toBe(true); // data file only
+    expect(f({ hasEmpty: true })).toBe(true); // empty marker only
+  });
+
+  test("a closed month with neither or both representations is not final", () => {
+    expect(f({})).toBe(false); // nothing written yet
+    expect(f({ hasData: true, hasEmpty: true })).toBe(false); // contradictory (crash between write+cleanup)
   });
 });
