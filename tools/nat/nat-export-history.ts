@@ -2,12 +2,13 @@
 // native CSV, one file per month, resumable. Range defaults to 2020-02 → current month.
 //   NAT_OP_ITEM='<your 1Password item>' bun run nat-export-history.ts [fromYm] [toYm]
 //   OUTDIR=/path/to/dir  overrides the output directory (default ./out/nat-history).
-import { mkdirSync, writeFileSync, existsSync, statSync, renameSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, statSync, renameSync, rmSync } from "node:fs";
 import { NatClient } from "./nat-client.ts";
 
 const fromYm = process.argv[2] ?? "2020-02";
-const now = new Date();
-const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+// Resolve "current month" in Asia/Taipei (the portal's zone), not the host's, so a
+// non-Taipei runner near a month boundary doesn't target the wrong month.
+const currentYm = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" }).slice(0, 7);
 const toYm = process.argv[3] ?? currentYm;
 const OUTDIR = process.env.OUTDIR ?? "./out/nat-history";
 mkdirSync(OUTDIR, { recursive: true });
@@ -37,7 +38,10 @@ try {
   for (const ym of months(fromYm, toYm)) {
     const out = `${OUTDIR}/nat_${ban}_${ym}.csv`;
     const empty = `${out}.empty`;
-    if ((existsSync(out) && statSync(out).size > 0) || existsSync(empty)) { console.log(`${ym}  (skip, archived)`); skipped++; continue; }
+    // Only closed months are final; the current (still-open) month is always re-fetched
+    // so invoices added later in the month aren't missed on a resumed/scheduled run.
+    const archived = (existsSync(out) && statSync(out).size > 0) || existsSync(empty);
+    if (archived && ym !== currentYm) { console.log(`${ym}  (skip, archived)`); skipped++; continue; }
     const [y, m] = ym.split("-").map(Number);
     const to = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
     const stamp = Date.now();
@@ -47,12 +51,13 @@ try {
       for (let i = 0; i < 60 && !job; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         job = (await client.listJobs())
-          .filter((j) => j.fileType === "CSV" && j.status === "2" && j.sellbuyType === "0" && j.queryStartDate?.startsWith(ym) && Date.parse(j.applyDate) >= stamp - 120_000)
+          .filter((j) => j.ban === ban && j.fileType === "CSV" && j.status === "2" && j.sellbuyType === "0" && j.queryStartDate?.startsWith(ym) && Date.parse(j.applyDate) >= stamp - 120_000)
           .sort((a, b) => b.seqNo - a.seqNo)[0];
       }
       if (!job) { console.log(`${ym}  ⚠️ job not ready (timeout)`); failed++; continue; }
       if (Number(job.dataCount) === 0) {
         writePrivateAtomic(empty, `no invoices for ${ym}\n`);
+        if (existsSync(out)) rmSync(out); // drop a stale data file if this month is now empty
         console.log(`${ym}  (empty)`);
         done++;
         continue;
@@ -60,6 +65,7 @@ try {
       const bytes = await client.downloadJob(job);
       if (bytes.length === 0) throw new Error("download returned an empty file");
       writePrivateAtomic(out, bytes);
+      if (existsSync(empty)) rmSync(empty); // month now has data — drop the stale empty marker
       console.log(`${ym}  M+D=${job.dataCount}  ${(bytes.length / 1024).toFixed(0)}KB  -> ${out.split("/").pop()}`);
       done++;
     } catch (e) {

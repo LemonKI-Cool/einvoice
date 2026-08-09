@@ -24,6 +24,7 @@ export interface ReportJob {
   queryEndDate: string;
   sellbuyType: string; // "1" 進項 / "2" 銷項
   companyName: string;
+  ban: string; // the job's own 統編 (decoded from the token) — filter downloads to your company
 }
 
 const iso = (d: string, end = false) => `${d}T${end ? "23:59:59.999" : "00:00:00.000"}Z`;
@@ -34,7 +35,7 @@ export interface NatInvoice {
   [col: string]: string | Array<Record<string, string>>;
 }
 
-/** Remove exact cross-month portal overlaps; reject a reused statutory key with conflicting content. */
+/** Remove exact cross-month portal overlaps; on a reused statutory key with conflicting content, keep the first and warn. */
 export function dedupeNatInvoices(invoices: NatInvoice[]): NatInvoice[] {
   const unique = new Map<string, { invoice: NatInvoice; signature: string }>();
   for (const invoice of invoices) {
@@ -43,7 +44,9 @@ export function dedupeNatInvoices(invoices: NatInvoice[]): NatInvoice[] {
     const signature = JSON.stringify(invoice);
     const previous = unique.get(key);
     if (previous) {
-      if (previous.signature !== signature) throw new Error(`NAT duplicate invoice key has conflicting content: ${key}`);
+      // Same statutory key, different content: surface it but keep the first so a long
+      // archival run isn't aborted by a single anomaly (e.g. a later void/amendment).
+      if (previous.signature !== signature) console.warn(`NAT duplicate invoice key with conflicting content — keeping the first: ${key}`);
       continue;
     }
     unique.set(key, { invoice, signature });

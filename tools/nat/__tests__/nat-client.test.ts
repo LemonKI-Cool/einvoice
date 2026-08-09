@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { dedupeNatInvoices, NatClient, type NatInvoice } from "../nat-client.ts";
 
 describe("NatClient.parseNatCsv", () => {
@@ -51,7 +51,12 @@ describe("dedupeNatInvoices", () => {
     expect(dedupeNatInvoices([invoice("100"), invoice("100")])).toHaveLength(1);
   });
 
-  test("rejects conflicting content under the same statutory key", () => {
-    expect(() => dedupeNatInvoices([invoice("100"), invoice("200")])).toThrow("conflicting content");
+  test("keeps the first row and warns on conflicting content under the same key", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const deduped = dedupeNatInvoices([invoice("100"), invoice("200")]);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]["總計"]).toBe("100");
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

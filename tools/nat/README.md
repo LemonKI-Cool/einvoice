@@ -73,11 +73,12 @@ NAT_OP_ITEM='<your item>' bun run nat-export-history.ts    [fromYm] [toYm]   # �
 NAT_OP_ITEM='<your item>' bun run nat-export-allowances.ts [fromYm] [toYm]   # 折讓單 (btb412w)
 ```
 
-Defaults: `2020-02` → the current month, output under `./out/nat-history` and
-`./out/nat-allowances` (override with `OUTDIR`). Empty allowance months are recorded with
-a `.empty` marker file so they aren't retried. Files are written atomically with mode
-0600, so an interrupted partial file is not mistaken for a completed month. Downloaded
-CSVs contain PII — `out/` is gitignored;
+Defaults: `2020-02` → the current month (resolved in Asia/Taipei), output under
+`./out/nat-history` and `./out/nat-allowances` (override with `OUTDIR`). Empty months in
+**either** export are recorded with a `.empty` marker file so they aren't retried. Files
+are written atomically with mode 0600, so an interrupted partial file is not mistaken for
+a completed month. The current (still-open) month is always re-fetched on each run; only
+closed months are treated as final. Downloaded CSVs contain PII — `out/` is gitignored;
 handle per your own data-retention rules.
 
 ### Switching accounts
