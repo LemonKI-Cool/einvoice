@@ -113,8 +113,14 @@ export async function login(): Promise<NatSession> {
     throw new Error("NAT login failed after retries");
   }
   await page.goto(DASH, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
-  await page.waitForTimeout(3000);
-  const jwt = (await page.evaluate(() => sessionStorage.getItem("token"))) ?? "";
+  // The SPA writes the JWT to sessionStorage a moment after the dashboard loads, so poll
+  // for it (up to ~20s) rather than reading once after a fixed wait — a single-shot check
+  // was hard-failing slow-but-successful logins where the token just wasn't written yet.
+  let jwt = "";
+  for (let i = 0; i < 20 && !jwt; i++) {
+    jwt = ((await page.evaluate(() => sessionStorage.getItem("token")).catch(() => "")) as string) ?? "";
+    if (!jwt) await page.waitForTimeout(1000);
+  }
   if (!jwt) {
     await browser.close();
     throw new Error("NAT login completed without an authentication token");
