@@ -1,14 +1,26 @@
 // Export the full reachable NAT history (進+銷, queryInvType=0) as the government's
-// native CSV, one file per month, resumable. Range defaults to 2020-02 → 2026-08.
+// native CSV, one file per month, resumable. Range defaults to 2020-02 → current month.
 //   NAT_OP_ITEM='<your 1Password item>' bun run nat-export-history.ts [fromYm] [toYm]
 //   OUTDIR=/path/to/dir  overrides the output directory (default ./out/nat-history).
-import { mkdirSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, statSync, renameSync } from "node:fs";
 import { NatClient } from "./nat-client.ts";
 
 const fromYm = process.argv[2] ?? "2020-02";
-const toYm = process.argv[3] ?? "2026-08";
+const now = new Date();
+const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+const toYm = process.argv[3] ?? currentYm;
 const OUTDIR = process.env.OUTDIR ?? "./out/nat-history";
 mkdirSync(OUTDIR, { recursive: true });
+
+if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(fromYm) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(toYm) || fromYm > toYm) {
+  throw new Error(`invalid month range: ${fromYm}..${toYm}`);
+}
+
+function writePrivateAtomic(path: string, data: string | Uint8Array): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, data, { mode: 0o600 });
+  renameSync(tmp, path);
+}
 
 function months(a: string, b: string): string[] {
   const [fy, fm] = a.split("-").map(Number); const [ty, tm] = b.split("-").map(Number);
@@ -19,12 +31,13 @@ function months(a: string, b: string): string[] {
 
 const client = await NatClient.login();
 try {
-  const ban = (await client.authorizedCompanies())[0].ban;
+  const ban = (await client.authorizedCompany()).ban;
   console.log(`logged in ${ban}; exporting native CSV ${fromYm}..${toYm} → ${OUTDIR}\n`);
   let done = 0, skipped = 0, failed = 0;
   for (const ym of months(fromYm, toYm)) {
     const out = `${OUTDIR}/nat_${ban}_${ym}.csv`;
-    if (existsSync(out) && statSync(out).size > 0) { console.log(`${ym}  (skip, exists)`); skipped++; continue; }
+    const empty = `${out}.empty`;
+    if ((existsSync(out) && statSync(out).size > 0) || existsSync(empty)) { console.log(`${ym}  (skip, archived)`); skipped++; continue; }
     const [y, m] = ym.split("-").map(Number);
     const to = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
     const stamp = Date.now();
@@ -38,8 +51,15 @@ try {
           .sort((a, b) => b.seqNo - a.seqNo)[0];
       }
       if (!job) { console.log(`${ym}  ⚠️ job not ready (timeout)`); failed++; continue; }
+      if (Number(job.dataCount) === 0) {
+        writePrivateAtomic(empty, `no invoices for ${ym}\n`);
+        console.log(`${ym}  (empty)`);
+        done++;
+        continue;
+      }
       const bytes = await client.downloadJob(job);
-      writeFileSync(out, bytes);
+      if (bytes.length === 0) throw new Error("download returned an empty file");
+      writePrivateAtomic(out, bytes);
       console.log(`${ym}  M+D=${job.dataCount}  ${(bytes.length / 1024).toFixed(0)}KB  -> ${out.split("/").pop()}`);
       done++;
     } catch (e) {

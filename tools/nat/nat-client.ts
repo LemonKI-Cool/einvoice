@@ -80,12 +80,13 @@ export class NatClient {
     readonly browser: Browser,
     readonly ctx: BrowserContext,
     readonly page: Page,
+    readonly loginBan: string,
   ) {}
 
   /** Log in (automated captcha) and return a ready client. */
   static async login(): Promise<NatClient> {
     const s = await login();
-    return new NatClient(s.browser, s.ctx, s.page);
+    return new NatClient(s.browser, s.ctx, s.page, s.ban);
   }
 
   /** In-page fetch → JSON. Reads the Bearer token from sessionStorage each call. */
@@ -129,6 +130,14 @@ export class NatClient {
     return this.apiJson("GET", "https://service-m.einvoice.nat.gov.tw/btb/settings/api/btb002i/company/authorized");
   }
 
+  /** Resolve the credential's 統編 against the companies this login may access. */
+  async authorizedCompany(ban = this.loginBan): Promise<{ ban: string; companyName: string; closed: boolean }> {
+    const companies = await this.authorizedCompanies();
+    const company = companies.find((candidate) => candidate.ban === ban);
+    if (!company) throw new Error(`NAT credential UBN ${ban} is not among this login's ${companies.length} authorized company record(s)`);
+    return company;
+  }
+
   /**
    * Online invoice query (即時). Returns up to **200** rows; throws none for empty.
    * Use a ≤1-month range so 進項 stays under 200; otherwise use the offline job.
@@ -169,6 +178,8 @@ export class NatClient {
       queryApplyDateStart: iso(opts.applyFrom ?? today),
       queryApplyDateEnd: iso(opts.applyTo ?? today, true),
       showMessage: "true",
+      page: "0",
+      size: "500",
     });
     const r = await this.apiJson<{ content?: Array<{ token: string }> }>("GET", `${API}/api/btb411w/reportJob/xlsx?${qs}`);
     // spread decoded fields first, then the raw list token last (decoded has token:null)
@@ -307,9 +318,9 @@ if (import.meta.main) {
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const c = await NatClient.login();
   try {
-    const companies = await c.authorizedCompanies();
-    const ban = companies[0].ban;
-    console.log("logged in; company:", companies[0].companyName, ban);
+    const company = await c.authorizedCompany();
+    const ban = company.ban;
+    console.log("logged in; company:", company.companyName, ban);
     const rows = await c.queryInvoices({ ban, from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, "0")}`, invType: "1" });
     console.log(`進項 ${ym}: ${rows.length} row(s) (online, ≤200)`);
   } finally {
