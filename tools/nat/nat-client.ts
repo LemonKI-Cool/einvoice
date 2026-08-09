@@ -86,6 +86,23 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
+/** Repair a NAT row where an unquoted comma in 買方名稱 shifted every later field. */
+function normalizeMasterRow(row: string[], header: string[]): string[] {
+  if (row.length !== header.length + 1) return row;
+  const buyerName = header.indexOf("買方名稱");
+  const sellerUbn = header.indexOf("賣方統一編號");
+  const sentAt = header.indexOf("寄送日期");
+  if (
+    buyerName < 0 ||
+    sellerUbn !== buyerName + 1 ||
+    sentAt < 0 ||
+    /^\d{8}$/.test(row[sellerUbn] ?? "") ||
+    !/^\d{8}$/.test(row[sellerUbn + 1] ?? "") ||
+    !/^\d{4}-\d{2}-\d{2}/.test(row[sentAt + 1] ?? "")
+  ) return row;
+  return [...row.slice(0, buyerName), `${row[buyerName]},${row[buyerName + 1]}`, ...row.slice(buyerName + 2)];
+}
+
 export class NatClient {
   private constructor(
     readonly browser: Browser,
@@ -261,8 +278,9 @@ export class NatClient {
           seenMHead = true;
           continue;
         } // skip header
+        const normalized = normalizeMasterRow(r, mHead);
         const inv: NatInvoice = { items: [] };
-        for (let i = 1; i < mHead.length; i++) inv[mHead[i]] = r[i] ?? "";
+        for (let i = 1; i < mHead.length; i++) inv[mHead[i]] = normalized[i] ?? "";
         invoices.push(inv);
       } else if (r[0] === "D" && dHead) {
         if (!seenDHead) {

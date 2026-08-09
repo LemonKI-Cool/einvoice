@@ -20,4 +20,21 @@ describe("NatClient.parseNatCsv", () => {
       { 發票號碼: "AB12345678", 品名: "顧問服務,進階方案", 單一欄位備註: 'customer said "ok"' },
     ]);
   });
+
+  test("repairs an unquoted comma in the portal's buyer-name field", () => {
+    const csv = [
+      "M,發票號碼,買方名稱,賣方統一編號,寄送日期,課稅別",
+      "D,發票號碼,品名",
+      "M,AB12345678,測試,分店,12345678,2026-01-02 03:04:05,應稅",
+      "D,AB12345678,服務費",
+      "",
+    ].join("\r\n");
+
+    const [invoice] = NatClient.parseNatCsv(new TextEncoder().encode(csv));
+
+    expect(invoice["買方名稱"]).toBe("測試,分店");
+    expect(invoice["賣方統一編號"]).toBe("12345678");
+    expect(invoice["寄送日期"]).toBe("2026-01-02 03:04:05");
+    expect(invoice["課稅別"]).toBe("應稅");
+  });
 });
