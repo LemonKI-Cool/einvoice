@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { NatClient } from "../nat-client.ts";
+import { dedupeNatInvoices, NatClient, type NatInvoice } from "../nat-client.ts";
 
 describe("NatClient.parseNatCsv", () => {
   test("preserves quoted commas, escaped quotes, and multiline fields", () => {
@@ -36,5 +36,22 @@ describe("NatClient.parseNatCsv", () => {
     expect(invoice["賣方統一編號"]).toBe("12345678");
     expect(invoice["寄送日期"]).toBe("2026-01-02 03:04:05");
     expect(invoice["課稅別"]).toBe("應稅");
+  });
+});
+
+describe("dedupeNatInvoices", () => {
+  const invoice = (total: string): NatInvoice => ({
+    發票號碼: "AB12345678",
+    賣方統一編號: "12345678",
+    總計: total,
+    items: [{ 品名: "測試品項" }],
+  });
+
+  test("removes an exact portal overlap", () => {
+    expect(dedupeNatInvoices([invoice("100"), invoice("100")])).toHaveLength(1);
+  });
+
+  test("rejects conflicting content under the same statutory key", () => {
+    expect(() => dedupeNatInvoices([invoice("100"), invoice("200")])).toThrow("conflicting content");
   });
 });

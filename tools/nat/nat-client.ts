@@ -34,6 +34,23 @@ export interface NatInvoice {
   [col: string]: string | Array<Record<string, string>>;
 }
 
+/** Remove exact cross-month portal overlaps; reject a reused statutory key with conflicting content. */
+export function dedupeNatInvoices(invoices: NatInvoice[]): NatInvoice[] {
+  const unique = new Map<string, { invoice: NatInvoice; signature: string }>();
+  for (const invoice of invoices) {
+    const key = `${invoice["賣方統一編號"] ?? ""}|${invoice["發票號碼"] ?? ""}`;
+    if (key === "|") throw new Error("NAT invoice is missing both seller UBN and invoice number");
+    const signature = JSON.stringify(invoice);
+    const previous = unique.get(key);
+    if (previous) {
+      if (previous.signature !== signature) throw new Error(`NAT duplicate invoice key has conflicting content: ${key}`);
+      continue;
+    }
+    unique.set(key, { invoice, signature });
+  }
+  return [...unique.values()].map(({ invoice }) => invoice);
+}
+
 /** Inclusive list of "YYYY-MM" between two YYYY-MM-DD dates. */
 function monthsBetween(from: string, to: string): string[] {
   const [fy, fm] = from.split("-").map(Number);
@@ -257,8 +274,9 @@ export class NatClient {
       for (const inv of invoices) {
         inv.direction = inv["買方統一編號"] === opts.ban ? "進項" : inv["賣方統一編號"] === opts.ban ? "銷項" : "其他";
       }
-      opts.onProgress?.(ym, invoices.length);
-      all.push(...invoices);
+      const merged = dedupeNatInvoices([...all, ...invoices]);
+      opts.onProgress?.(ym, merged.length - all.length);
+      all.splice(0, all.length, ...merged);
     }
     return all;
   }
