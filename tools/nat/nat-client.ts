@@ -51,28 +51,39 @@ function monthsBetween(from: string, to: string): string[] {
   return out;
 }
 
-/** Quote-aware CSV line split (handles ""-escaped quotes and commas in fields). */
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
+/** Parse complete CSV records, including quoted commas, quotes, and newlines. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
   let cur = "";
   let q = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
     if (q) {
       if (ch === '"') {
-        if (line[i + 1] === '"') {
+        if (text[i + 1] === '"') {
           cur += '"';
           i++;
         } else q = false;
       } else cur += ch;
     } else if (ch === '"') q = true;
     else if (ch === ",") {
-      out.push(cur);
+      row.push(cur);
+      cur = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cur);
+      rows.push(row);
+      row = [];
       cur = "";
     } else cur += ch;
   }
-  out.push(cur);
-  return out;
+  if (cur.length || row.length) {
+    row.push(cur);
+    rows.push(row);
+  }
+  if (rows[0]?.[0].startsWith("\uFEFF")) rows[0][0] = rows[0][0].slice(1);
+  return rows;
 }
 
 export class NatClient {
@@ -237,7 +248,7 @@ export class NatClient {
 
   /** Parse a 財政部 M/D-format CSV (UTF-8) into invoices (M) + their line items (D). */
   static parseNatCsv(bytes: Uint8Array): NatInvoice[] {
-    const rows = new TextDecoder("utf-8").decode(bytes).split(/\r?\n/).filter((l) => l.length).map(parseCsvLine);
+    const rows = parseCsv(new TextDecoder("utf-8").decode(bytes)).filter((row) => row.some((cell) => cell.length));
     const mHead = rows.find((r) => r[0] === "M");
     const dHead = rows.find((r) => r[0] === "D");
     if (!mHead) return [];
